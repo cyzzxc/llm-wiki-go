@@ -101,10 +101,14 @@ llm-wiki schema validate [type]                          # ok / 问题行（退�
 ## 服务
 
 ```
-llm-wiki serve [--http[:PORT]] [--acp] [--watch] [--dry-run]
-  # --dry-run → Would start: [stdio] / [acp] [http :PORT] [watch]
-  # 传输互斥规则：ACP 独占 stdio；HTTP 可与 ACP 并存；否则 MCP stdio
+llm-wiki serve [--http[:PORT]] [--web[:PORT]] [--acp] [--watch] [--dry-run]
+  # --dry-run → Would start: [stdio] / [acp] [http :PORT] [web :PORT] [watch]
+  # 传输互斥规则：ACP 独占 stdio；HTTP 可与 ACP 并存；--web 抑制 stdio（后台运行 stdin EOF 不致退出）；否则 MCP stdio
   # ctrl-c / SIGTERM 优雅退出（"server stopped"）
+llm-wiki serve --web            # 只读 Web UI @ http://127.0.0.1:8090（可与 --http/--acp/--watch 叠加）
+  # 路由：/ 首页（统计 pills + Recently tended + git Activity）、/p/<slug> 页面、
+  #        /search?q=&mode=keyword|hybrid|semantic、/list[/<type>]、
+  #        /graph（+ /graph.mmd /graph.dot 下载）、/feed.xml（RSS）
 llm-wiki watch            # 独立 watcher：Watching for changes (ctrl+c to stop)…
 ```
 

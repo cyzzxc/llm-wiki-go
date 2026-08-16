@@ -43,9 +43,19 @@ llm-wiki ingest .
 llm-wiki search "混合专家模型"
 llm-wiki graph --format mermaid
 llm-wiki serve            # MCP stdio server（接入 Claude / Zed 等）
+llm-wiki serve --web      # 只读 Web UI @ http://127.0.0.1:8090（可与其它传输叠加）
 ```
 
 数据归你：页面是普通 Markdown + git 仓库；索引与快照都是可再生的派生缓存（`~/.llm-wiki/`），删掉即重建。
+
+## Web UI（Go 版增量，只读）
+
+`serve --web[:PORT]` 在独立端口起一个服务端渲染的只读界面（默认 `127.0.0.1:8090`，仅本机）：
+首页（类型统计 + Recently tended + git Activity 日志）、`/p/<slug>` 页面阅读（`[[wikilink]]` 与相对
+.md 链接自动归一为站内链接；中文衬线排版、暗色模式自适应）、`/search`（BM25 关键词 / hybrid 语义，
+未配置 `[embedding]` 时自动回退）、`/list/<type>`、`/graph`（文本图 + Mermaid/DOT 下载）、`/feed.xml` RSS。
+无框架、无外联请求、单页 ~6KB；agent 写、人读——编辑仍走 git/agent，不做编辑 UI。
+设计取舍见 `docs/web-frontend-plan.md`。
 
 ## 中文分词
 
@@ -106,13 +116,13 @@ model = "qwen3-embedding-8b"               # 索引与查询必须同模型
 `wiki_index_rebuild / status`、`wiki_graph`、`wiki_export`、`wiki_history`、`wiki_stats`、
 `wiki_suggest`、`wiki_lint`、`wiki_resolve`、`wiki_schema`、`wiki_info`
 
-传输：`llm-wiki serve`（stdio）、`--http[:PORT]`（Streamable HTTP @ `/mcp`，Host 白名单 + 绑定重试）、`--acp`（ACP 独占 stdio，接入 Zed）、`--watch`（文件保存自动 ingest）。
+传输：`llm-wiki serve`（stdio）、`--http[:PORT]`（Streamable HTTP @ `/mcp`，Host 白名单 + 绑定重试）、`--acp`（ACP 独占 stdio，接入 Zed）、`--web[:PORT]`（只读 Web UI，独立端口）、`--watch`（文件保存自动 ingest）。
 
 ## 预算实测（M1, go1.26）
 
 | 指标 | 实测 | 预算 |
 |---|---|---|
-| 二进制体积 | 20MB（`-s -w` 后 15MB，含 4.9MB 词典） | ≤20MB |
+| 二进制体积 | 24.7MB（`-s -w` 后 18.7MB，含 4.9MB 词典 + Web UI 的 goldmark/模板引擎 ~4MB） | — |
 | 1000 页中文库全量重建 | 188ms（另含一次性词典加载 ~400ms） | <1s |
 | 内存检索延迟 | 0.38ms @1k 页；5.8ms @10k 页 | p95 <50ms |
 | CLI 单发查询 | ~435ms（进程启动 + 词典加载；常驻服务只付一次） | — |
@@ -126,7 +136,7 @@ model = "qwen3-embedding-8b"               # 索引与查询必须同模型
 - **日志轮转**：`daily | never`（原版另有 `hourly`，按 `daily` 处理）。
 - **MCP resources**：go-sdk 静态注册模型，spaces 变更时增量同步并广播 list-changed；resource-updated 通知发给订阅会话。
 - **watch**：fsnotify；运行中新建的子目录需重建 watcher 才会被监控（已知限制）。
-- **`[[slug|alias]]` 管道别名**：与原版一致，不支持（整个串按 slug 处理）。
+- **`[[slug|alias]]` 管道别名**：链接提取/索引不支持（整个串按 slug 处理）；仅 Web UI 渲染时支持显示别名。
 
 ## 测试
 

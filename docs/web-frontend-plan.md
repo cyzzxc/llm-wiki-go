@@ -1,8 +1,21 @@
-# Web 前端实施方案（已批准，待实现）
+# Web 前端实施方案（已实现 ✅ 2026-08-16）
 
 > 本文档自足：新会话无需旧上下文即可实施。方案已于 2026-08-16 经用户批准（"开工"），
 > 因会话上下文限制转入新会话执行。仓库：`llm-wiki-go/`（remote `origin` =
 > `https://github.com/cyzzxc/llm-wiki-go.git`，main 分支）。
+>
+> **实施结果**（与方案的偏差记录）：
+> - 按计划落地：`internal/web/web.go` + `templates.go`、`--web[:PORT]` 接线、全部路由与测试、文档。
+> - 偏差 1：首页/RSS 的最近更新数据经新增 ops 层函数 `OpsRecentPages` 提供（方案允许
+>   "Searcher().Docs 遍历"，但 AGENTS.md 不变量 #1 要求 web 只调 Ops*，故收敛到 ops 层实现同一遍历）。
+> - 偏差 2：`serve --web` 单独使用时抑制 MCP stdio（否则后台运行时 stdin EOF 会让整个 serve 退出——
+>   冒烟测试发现的真问题；与 --http/--acp 的既有抑制规则一致）。
+> - 偏差 3：raw HTML 的中和方式是 goldmark 默认的 `<!-- raw HTML omitted -->`（丢弃而非转义文本），
+>   比"模板转义"更严格；`<script>` 载荷完全不进输出。
+> - 偏差 4（预算未达）：二进制增量 +4.3MB（goldmark ~2.5MB + html/text/template ~1.5MB，MCP SDK
+>   此前不引模板引擎），超出 §8 预估的 ≤ +1MB。goldmark 是本方案批准的核心选型（CommonMark 标准
+>   实现），接受该成本；实测 24.7MB / strip 后 18.7MB。
+> - 预算达成：单页 ~6KB（含内联 CSS，预算 ≤30KB）、零外联请求、JS ~230B、零新增持久化。
 
 ## 0. 当前状态（截至本文档写入）
 

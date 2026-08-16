@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -11,11 +12,13 @@ import (
 	"llm-wiki-go/internal/acpserver"
 	"llm-wiki-go/internal/mcpserver"
 	"llm-wiki-go/internal/watch"
+	"llm-wiki-go/internal/web"
 	"llm-wiki-go/internal/wiki"
 )
 
 // cmdServe runs the MCP server: stdio always; HTTP with --http[:PORT] or
-// serve.http; ACP with --acp or serve.acp; watcher with --watch.
+// serve.http; ACP with --acp or serve.acp; the web UI with --web[:PORT];
+// watcher with --watch.
 func (c *cli) cmdServe(ctx context.Context, args []string) int {
 	_, flags := parseFlags(args)
 	engine := c.engineOrDie()
@@ -38,6 +41,24 @@ func (c *cli) cmdServe(ctx context.Context, args []string) int {
 			}
 		}
 	}
+	// --web[:PORT] selects the read-only web UI on its own port (default
+	// 8090, loopback-only). It coexists with every other transport.
+	webEnabled := false
+	webPort := 8090
+	for name, v := range flags {
+		if name == "web" || strings.HasPrefix(name, "web:") || strings.HasPrefix(name, "web=") {
+			webEnabled = true
+			v = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(name, "web"), ":"), "=")
+			if v == "" {
+				v = strings.TrimPrefix(flags["web"], ":")
+			}
+			if v != "" && v != "true" {
+				if p, err := strconv.Atoi(v); err == nil {
+					webPort = p
+				}
+			}
+		}
+	}
 	acpEnabled := cfg.ACP || flagBool(flags, "acp")
 	watchEnabled := flagBool(flags, "watch")
 
@@ -46,6 +67,9 @@ func (c *cli) cmdServe(ctx context.Context, args []string) int {
 		parts = append(parts, "stdio")
 		if httpEnabled {
 			parts = append(parts, fmt.Sprintf("http :%d", port))
+		}
+		if webEnabled {
+			parts = append(parts, fmt.Sprintf("web :%d", webPort))
 		}
 		if acpEnabled {
 			parts = append(parts, "acp")
@@ -114,7 +138,10 @@ func (c *cli) cmdServe(ctx context.Context, args []string) int {
 	if httpEnabled {
 		transports = append(transports, fmt.Sprintf("http :%d", port))
 	}
-	if !acpEnabled && !httpEnabled {
+	if webEnabled {
+		transports = append(transports, fmt.Sprintf("web :%d", webPort))
+	}
+	if !acpEnabled && !httpEnabled && !webEnabled {
 		transports = append(transports, "stdio")
 	}
 	if watchEnabled {
@@ -123,10 +150,11 @@ func (c *cli) cmdServe(ctx context.Context, args []string) int {
 	logger.Info("server started", "wikis", len(engine.SpacesList()), "transports", fmt.Sprintf("[%s]", strings.Join(transports, "] [")))
 
 	// Transport selection matches the Rust original: ACP owns stdio when
-	// enabled; HTTP runs alongside ACP or alone; MCP stdio only when
-	// neither ACP nor HTTP is active (stdio EOF would otherwise stop the
-	// whole serve command).
-	errCh := make(chan error, 3)
+	// enabled; HTTP runs alongside ACP or alone; MCP stdio only when no
+	// server transport is active — stdio EOF (e.g. backgrounded serve)
+	// would otherwise stop the whole command, so the web UI suppresses it
+	// too.
+	errCh := make(chan error, 4)
 	switch {
 	case acpEnabled:
 		acp := acpserver.New(engine, cfg, logger, acpPush)
@@ -140,8 +168,22 @@ func (c *cli) cmdServe(ctx context.Context, args []string) int {
 		go func() {
 			errCh <- server.ServeHTTP(ctx, port, cfg.HTTPAllowedHosts, cfg.MaxRestarts, cfg.RestartBackoff)
 		}()
-	default:
+	case !webEnabled:
 		go func() { errCh <- server.ServeStdio(ctx) }()
+	}
+
+	if webEnabled {
+		ui := web.New(engine, c.wikiName())
+		webSrv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", webPort), Handler: ui}
+		go func() {
+			if err := webSrv.ListenAndServe(); err != nil && ctx.Err() == nil {
+				errCh <- err
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			webSrv.Close()
+		}()
 	}
 
 	select {

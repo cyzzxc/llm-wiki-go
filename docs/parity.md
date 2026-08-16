@@ -14,6 +14,7 @@
 | 搜索 | tantivy BM25 + 状态/置信度乘子 + 分面 + 摘要 | 手写 BM25 同参数同乘子 | ✅ 行为对齐（实现偏差见下） |
 | 中文检索 | ❌ en_stem 对中文无效 | gse 词典分词一等公民 | ➕ 增量 |
 | 语义检索 | ❌ 无 | [embedding] 可选层：semantic/hybrid 模式，OpenAI 兼容网关 | ➕ 增量 |
+| Web UI | ❌ 无 | `serve --web[:PORT]`：服务端渲染只读界面（页面/搜索/列表/图/RSS） | ➕ 增量 |
 | 索引生命周期 | state.toml + 增量 + 部分重建 + staleness 四态 | 同 | ✅ 对齐 |
 | 图 | petgraph + Louvain p1 + 快照 + 跨库合并 | 内建图 + 同算法 | ✅ 对齐 |
 | 结构算法 | 割点/桥/直径/半径/中心/边缘 | Tarjan/BFS 同语义 | ✅ 对齐 |
@@ -45,6 +46,14 @@
 
 - **中文分词**：docs/tokenizer.md。
 - **语义搜索**：`[embedding]` 段（默认关）+ `wiki_search.mode` / CLI `--semantic`/`--hybrid`；OpenAI 兼容 `/embeddings` 网关（实测 AxonHub + qwen3-embedding-8b，4096 维）；同模型约束，换模型自动全量重嵌。设计见 docs/search.md。
+- **Web UI（只读）**：`serve --web[:PORT]`（默认 127.0.0.1:8090，可与其它传输叠加）。服务端渲染
+  （html/template + goldmark；单页 ~6KB、零外联请求、JS 仅 `/` 聚焦搜索框）。路由：`/`（统计 pills +
+  Recently tended + git Activity）、`/p/<slug>`（正文渲染：`[[wikilink]]` 与相对 .md 链接在渲染前归一为
+  `/p/` href；raw HTML 被 goldmark 中和为注释；fenced code 不改写）、`/search`（keyword/hybrid/semantic，
+  未配置 `[embedding]` 自动回退 keyword 并页面标注）、`/list[/<type>]`、`/graph`（+ `.mmd`/`.dot` 下载）、
+  `/feed.xml`（RSS）。数据全部经 ops 层（含新增 `OpsRecentPages`）；零新增持久化。注意：渲染层支持
+  `[[slug|别名]]` 显示别名——仅显示；链接提取/索引层行为与原版一致，仍不支持别名（见「已知限制」）。
+  设计文档：docs/web-frontend-plan.md。
 
 ## 已知限制（Go 版）
 

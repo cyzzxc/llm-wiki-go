@@ -93,10 +93,10 @@ func extractWikilinks(text string, seen map[string]bool, result *[]ParsedLink, s
 	extractCommonmarkLinks(text, seen, result, sourceDir)
 }
 
-// normalizeCommonmarkDest normalizes a CommonMark link destination against
+// NormalizeCommonmarkDest normalizes a CommonMark link destination against
 // the source page's directory: strip .md, resolve ./ and ../ prefixes.
 // Absolute destinations are returned unchanged (minus .md).
-func normalizeCommonmarkDest(dest, sourceDir string) string {
+func NormalizeCommonmarkDest(dest, sourceDir string) string {
 	dest = strings.TrimSuffix(dest, ".md")
 	if !strings.HasPrefix(dest, "./") && !strings.HasPrefix(dest, "../") && dest != ".." {
 		return dest
@@ -158,7 +158,7 @@ func extractCommonmarkLinks(text string, seen map[string]bool, result *[]ParsedL
 					!strings.HasPrefix(destRaw, "#") {
 					raw := destRaw
 					if sourceDir != nil {
-						raw = normalizeCommonmarkDest(destRaw, sourceDir[0])
+						raw = NormalizeCommonmarkDest(destRaw, sourceDir[0])
 					}
 					if !seen[raw] {
 						seen[raw] = true

@@ -105,6 +105,54 @@ func BacklinksQuery(engine *WikiEngine, wikiName, slug string) []map[string]stri
 	return ix.Backlinks(slug)
 }
 
+// RecentPage is a page plus its last_updated date, ordered by recency for
+// web surfaces (home "recently tended", RSS feed).
+type RecentPage struct {
+	Slug        string
+	Title       string
+	Type        string
+	Summary     string
+	LastUpdated string
+}
+
+// OpsRecentPages returns up to limit pages sorted by last_updated
+// descending (ISO dates sort lexicographically; undated pages last,
+// slug-ordered as tiebreak).
+func OpsRecentPages(engine *WikiEngine, wikiName string, limit int) ([]RecentPage, error) {
+	space, err := engine.Space(wikiName)
+	if err != nil {
+		return nil, err
+	}
+	ix := space.IndexManager.Searcher()
+	if ix == nil {
+		return []RecentPage{}, nil
+	}
+	var pages []RecentPage
+	for _, d := range ix.Docs {
+		pages = append(pages, RecentPage{
+			Slug: d.Slug, Title: d.Title, Type: d.Type,
+			Summary: d.Summary, LastUpdated: d.TextVals["last_updated"],
+		})
+	}
+	sort.Slice(pages, func(i, j int) bool {
+		a, b := pages[i], pages[j]
+		if a.LastUpdated != b.LastUpdated {
+			if a.LastUpdated == "" {
+				return false
+			}
+			if b.LastUpdated == "" {
+				return true
+			}
+			return a.LastUpdated > b.LastUpdated
+		}
+		return a.Slug < b.Slug
+	})
+	if len(pages) > limit {
+		pages = pages[:limit]
+	}
+	return pages, nil
+}
+
 // Suggestion is one related-page suggestion.
 type Suggestion struct {
 	Slug   string  `json:"slug"`

@@ -32,6 +32,7 @@
 | `internal/assets/` | 内嵌资产：zh 词典 + 默认 schema/模板 |
 | `internal/mcpserver/` | MCP：24 个 wiki_* 工具 + resources + stdio/HTTP 传输 |
 | `internal/acpserver/` | ACP v1 agent：JSON-RPC over stdio + 5 个工作流 |
+| `internal/web/` | 只读 Web UI（`serve --web`）：服务端渲染 + goldmark + wikilink 预处理 |
 | `internal/watch/` | fsnotify + debounce 自动 ingest |
 
 ## 关键类型
@@ -49,7 +50,7 @@
 3. **gob 只编码导出字段**。任何改动 `SearchIndex`/`WikiGraph` 字段后，确认解码路径调用了 `rebuildStats()` / 重建 `adjOut/adjIn`；否则跨进程检索静默为空（踩过）。
 4. **`persist()` 必须同时写 state.toml 和 index.gob**。只写 gob 会让增量更新锚点（last commit）丢失（踩过）。
 5. **git porcelain 与 diff 必须 `-c core.quotePath=false`**，否则中文路径被 C 转义，changed-paths 匹配失效（踩过）；重命名必须双向记录（新路径 + 旧路径删除）。
-6. **stdio 独占**：ACP 启用时独占 stdin/stdout；HTTP 与 ACP 可共存；MCP stdio 仅在两者都未启用时运行。三者同抢 stdio 会静默吞消息（踩过）。
+6. **stdio 独占**：ACP 启用时独占 stdin/stdout；HTTP/ACP/Web 可任意共存；MCP stdio 仅在 HTTP、ACP、Web 三者都未启用时运行（`--web` 单开也抑制 stdio——后台 stdin EOF 会停掉整个 serve，踩过）。同抢 stdio 会静默吞消息。
 7. **索引与查询必须用同一个 tokenizer**（名称记录在索引里，`Open()` 检测变更即强制重建）。查询侧换分词器 = 匹配断裂。
 8. **confidence 缺席是语义**：`Confidence *float64` 为 nil 时乘子取 1.0，绝不伪造 0.5。status 缺席取 `unknown` 乘子（默认 0.9）。
 9. **slug 永远 POSIX 风格**（`/` 分隔）；跨平台路径在 `SlugFromPath`/git 层做转换。

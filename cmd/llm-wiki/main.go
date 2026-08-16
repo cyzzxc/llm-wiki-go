@@ -56,7 +56,7 @@ Commands:
   schema validate [type]
   export [--path] [--format llms-txt|llms-full|json] [--status active|all]
   resolve <uri>
-  serve [--http[:PORT]] [--acp] [--watch] [--dry-run]
+  serve [--http[:PORT]] [--web[:PORT]] [--acp] [--watch] [--dry-run]
   watch
   logs tail [--lines N]
   logs list
