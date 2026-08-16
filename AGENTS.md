@@ -28,6 +28,7 @@
 | `internal/wiki/ops_*.go` | ops 层：CLI 与 MCP 共用的操作入口（单一事实源） |
 | `internal/wiki/logging.go` | slog 轮转文件日志（daily/never + prune） |
 | `internal/tokenizer/` | 中文/拉丁分词（gse 词典 + 脚本路由） |
+| `internal/embed/` | OpenAI 兼容嵌入客户端（批量/重试/归一化）——语义搜索，默认关 |
 | `internal/assets/` | 内嵌资产：zh 词典 + 默认 schema/模板 |
 | `internal/mcpserver/` | MCP：24 个 wiki_* 工具 + resources + stdio/HTTP 传输 |
 | `internal/acpserver/` | ACP v1 agent：JSON-RPC over stdio + 5 个工作流 |
@@ -52,6 +53,13 @@
 7. **索引与查询必须用同一个 tokenizer**（名称记录在索引里，`Open()` 检测变更即强制重建）。查询侧换分词器 = 匹配断裂。
 8. **confidence 缺席是语义**：`Confidence *float64` 为 nil 时乘子取 1.0，绝不伪造 0.5。status 缺席取 `unknown` 乘子（默认 0.9）。
 9. **slug 永远 POSIX 风格**（`/` 分隔）；跨平台路径在 `SlugFromPath`/git 层做转换。
+
+## 嵌入（语义搜索）规约
+
+- `[embedding]` 是**可选外联**：未启用时引擎完全离线；任何改动不得让默认路径产生网络调用。
+- 同模型硬约束：state 记 `embedding_model`，配置变更 → stale → 全量重嵌；查询与索引必须同网关同模型。
+- 嵌入 pass 失败**降级不阻塞**（无向量 + 警告）；增量更新只嵌无向量的文档。
+- 网络相关测试只用 httptest 假网关（`internal/embed/embed_test.go`、`internal/wiki/semantic_test.go` 的确定性标记向量）；真实网关只进手工冒烟。
 
 ## 中文分词规约
 

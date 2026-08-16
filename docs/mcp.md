@@ -51,10 +51,11 @@
 ## 检索
 
 ### wiki_search
-`{query*, type?, no_excerpt?, include_sections?, top_k?, wiki?, cross_wiki?, format?}`
+`{query*, type?, no_excerpt?, include_sections?, top_k?, wiki?, cross_wiki?, mode?, format?}`
 - 默认 pretty JSON `SearchResult {results: [{slug, uri, title, score, confidence, excerpt?, summary?}], facets: {type, status, tags}}`
 - `format: "llms"` → 纯 markdown 行列表（强制无摘要）
 - `cross_wiki` 合并全部已挂载库重排
+- `mode: keyword(默认) | semantic | hybrid`（语义/混合需 [embedding] 配置，见 docs/search.md）
 - 中文分词见 docs/tokenizer.md；打分语义见 docs/search.md
 
 ### wiki_list

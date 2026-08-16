@@ -13,6 +13,7 @@
 | CLI | clap 全命令树 | 同命令树 + 同输出格式 | ✅ 对齐 |
 | 搜索 | tantivy BM25 + 状态/置信度乘子 + 分面 + 摘要 | 手写 BM25 同参数同乘子 | ✅ 行为对齐（实现偏差见下） |
 | 中文检索 | ❌ en_stem 对中文无效 | gse 词典分词一等公民 | ➕ 增量 |
+| 语义检索 | ❌ 无 | [embedding] 可选层：semantic/hybrid 模式，OpenAI 兼容网关 | ➕ 增量 |
 | 索引生命周期 | state.toml + 增量 + 部分重建 + staleness 四态 | 同 | ✅ 对齐 |
 | 图 | petgraph + Louvain p1 + 快照 + 跨库合并 | 内建图 + 同算法 | ✅ 对齐 |
 | 结构算法 | 割点/桥/直径/半径/中心/边缘 | Tarjan/BFS 同语义 | ✅ 对齐 |
@@ -39,6 +40,11 @@
 | 6 | tantivy 目录索引 | index.gob + state.toml | 内部格式 |
 | 7 | rmcp resources 动态 list | go-sdk 静态 AddResource + spaces 变更时同步 | 客户端可见行为一致 |
 | 8 | tracing + rolling file | slog + 自写轮转 | hourly 不支持 |
+
+## Go 版独有增量
+
+- **中文分词**：docs/tokenizer.md。
+- **语义搜索**：`[embedding]` 段（默认关）+ `wiki_search.mode` / CLI `--semantic`/`--hybrid`；OpenAI 兼容 `/embeddings` 网关（实测 AxonHub + qwen3-embedding-8b，4096 维）；同模型约束，换模型自动全量重嵌。设计见 docs/search.md。
 
 ## 已知限制（Go 版）
 

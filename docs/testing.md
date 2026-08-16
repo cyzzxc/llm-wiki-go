@@ -56,6 +56,23 @@ llm-wiki stats && llm-wiki graph | head && llm-wiki lint
 llm-wiki export --path /tmp/llms.txt
 ```
 
+### 1b. 语义搜索（真实网关，可选）
+
+```console
+export HOME=$(mktemp -d)
+llm-wiki spaces create /tmp/w --name w --set-default
+# 写中文页面后：
+llm-wiki config set embedding.enabled true --global
+llm-wiki config set embedding.base_url http://<网关>/v1 --global
+llm-wiki config set embedding.api_key "$KEY" --global   # 或 export LLM_WIKI_EMBEDDING_API_KEY
+llm-wiki ingest . && llm-wiki index rebuild
+llm-wiki search "无词面重叠的同义查询" --semantic        # 期望命中语义相关页
+llm-wiki search "english query on chinese wiki" --semantic  # 跨语言召回
+llm-wiki search "关键词" --hybrid
+```
+
+单元测试不依赖网络：`internal/embed/embed_test.go` 与 `internal/wiki/semantic_test.go` 用 httptest 假网关（按文本标记返回确定性向量）。
+
 ### 2. MCP stdio
 
 ```console

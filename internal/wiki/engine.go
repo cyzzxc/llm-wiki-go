@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	embedpkg "llm-wiki-go/internal/embed"
 	"llm-wiki-go/internal/tokenizer"
 )
 
@@ -18,8 +19,10 @@ type SpaceContext struct {
 	IndexSchema  *IndexSchema
 	IndexManager *IndexManager
 	Tokenizer    *tokenizer.Tokenizer
-	GraphCache   *GraphCache
-	Resolved     ResolvedConfig
+	// Embed is the semantic-search client; nil when [embedding] is off.
+	Embed      *embedpkg.Client
+	GraphCache *GraphCache
+	Resolved   ResolvedConfig
 
 	communityMu       sync.Mutex
 	communityGen      uint64
@@ -138,7 +141,7 @@ func (e *WikiEngine) SchemaRebuild(wikiName string) error {
 		return err
 	}
 	im := space.IndexManager
-	switch im.Staleness(space.RepoRoot) {
+	switch im.Staleness(space.RepoRoot, embedModelOf(e.State.Config)) {
 	case StalenessCurrent:
 		return nil
 	case StalenessCommitChanged:
@@ -225,12 +228,18 @@ func MountSpace(entry WikiEntry, stateDir string, config *GlobalConfig) (*SpaceC
 		return nil, err
 	}
 
+	var embedClient *embedpkg.Client
+	if config.Embedding.Usable() {
+		embedClient = embedpkg.New(config.Embedding)
+		im.SetEmbedClient(embedClient)
+	}
+
 	status := im.Status(repoRoot)
 	needsFirstBuild := status.Built == nil
 	if needsFirstBuild {
 		im.Rebuild(wikiRoot, repoRoot, indexSchema, registry)
 	} else if resolved.Index.AutoRebuild {
-		switch im.Staleness(repoRoot) {
+		switch im.Staleness(repoRoot, embedModelOf(config)) {
 		case StalenessCurrent:
 		case StalenessCommitChanged:
 			im.Update(wikiRoot, repoRoot, im.LastCommit(), indexSchema, registry)
@@ -262,9 +271,17 @@ func MountSpace(entry WikiEntry, stateDir string, config *GlobalConfig) (*SpaceC
 		IndexSchema:  indexSchema,
 		IndexManager: im,
 		Tokenizer:    tok,
+		Embed:        embedClient,
 		GraphCache:   graphCache,
 		Resolved:     resolved,
 	}, nil
+}
+
+func embedModelOf(config *GlobalConfig) string {
+	if config.Embedding.Usable() {
+		return config.Embedding.Model
+	}
+	return ""
 }
 
 // GetOrBuildGraph returns the cached full graph (bypassing the cache for

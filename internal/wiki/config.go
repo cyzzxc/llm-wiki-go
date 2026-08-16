@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
+
+	embedpkg "llm-wiki-go/internal/embed"
 )
 
 // GlobalSection is the [global] section of the global config.
@@ -211,6 +213,11 @@ type RedactConfig struct {
 	Patterns []CustomPattern `toml:"patterns"`
 }
 
+// EmbeddingConfig is the [embedding] section — semantic search via an
+// external OpenAI-compatible embeddings gateway. Global-only. Disabled
+// by default: the engine stays fully offline unless explicitly enabled.
+type EmbeddingConfig = embedpkg.Config
+
 // GlobalConfig is the root of ~/.llm-wiki/config.toml.
 type GlobalConfig struct {
 	Global     GlobalSection    `toml:"global"`
@@ -229,6 +236,7 @@ type GlobalConfig struct {
 	Logging    LoggingConfig    `toml:"logging"`
 	Watch      WatchConfig      `toml:"watch"`
 	Redact     RedactConfig     `toml:"redact"`
+	Embedding  EmbeddingConfig  `toml:"embedding"`
 }
 
 // NewDefaultGlobalConfig returns the global config defaults.
@@ -246,6 +254,7 @@ func NewDefaultGlobalConfig() *GlobalConfig {
 		Suggest:    defaultSuggestConfig(),
 		Search:     defaultSearchConfig(),
 		Lint:       defaultLintConfig(),
+		Embedding:  embedpkg.Defaults(),
 	}
 }
 
@@ -385,6 +394,7 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 		Logging    *LoggingConfig    `toml:"logging"`
 		Watch      *WatchConfig      `toml:"watch"`
 		Redact     *RedactConfig     `toml:"redact"`
+		Embedding  *EmbeddingConfig  `toml:"embedding"`
 		Search     *searchStatusFile `toml:"search"`
 	}
 	var f fileCfg
@@ -434,6 +444,9 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 	if f.Redact != nil {
 		cfg.Redact = *f.Redact
 	}
+	if f.Embedding != nil {
+		cfg.Embedding = f.Embedding.ApplyDefaults()
+	}
 	if f.Search != nil && f.Search.Search.Status != nil {
 		for k, v := range f.Search.Search.Status {
 			cfg.Search.Status[k] = v
@@ -466,6 +479,7 @@ func SaveGlobal(cfg *GlobalConfig, path string) error {
 		Logging    LoggingConfig    `toml:"logging"`
 		Watch      WatchConfig      `toml:"watch"`
 		Redact     RedactConfig     `toml:"redact"`
+		Embedding  EmbeddingConfig  `toml:"embedding"`
 	}
 	f := fullFile{
 		Global: cfg.Global, Wikis: cfg.Wikis, Defaults: cfg.Defaults,
@@ -475,6 +489,7 @@ func SaveGlobal(cfg *GlobalConfig, path string) error {
 		Watch: cfg.Watch, Redact: cfg.Redact,
 	}
 	f.Search.Search.Status = cfg.Search.Status
+	f.Embedding = cfg.Embedding
 	if err := enc.Encode(f); err != nil {
 		return err
 	}
@@ -628,6 +643,26 @@ func SetGlobalConfigValue(g *GlobalConfig, key, value string) error {
 		g.Logging.LogFormat = value
 	case "watch.debounce_ms":
 		return applyInt(&g.Watch.DebounceMs, parseInt)
+	case "embedding.enabled":
+		return applyBool(&g.Embedding.Enabled, value)
+	case "embedding.base_url":
+		g.Embedding.BaseURL = value
+	case "embedding.api_key":
+		g.Embedding.APIKey = value
+	case "embedding.model":
+		g.Embedding.Model = value
+	case "embedding.batch_size":
+		return applyInt(&g.Embedding.BatchSize, parseInt)
+	case "embedding.max_text_chars":
+		return applyInt(&g.Embedding.MaxTextChars, parseInt)
+	case "embedding.timeout_secs":
+		return applyInt(&g.Embedding.TimeoutSecs, parseInt)
+	case "embedding.hybrid_weight":
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("invalid value %q for %s: %v", value, key, err)
+		}
+		g.Embedding.HybridWeight = f
 	default:
 		if status, ok := searchStatusKey(key); ok {
 			f, err := strconv.ParseFloat(value, 64)
@@ -715,6 +750,22 @@ func GetConfigValue(resolved *ResolvedConfig, global *GlobalConfig, key string) 
 		return global.Logging.LogFormat
 	case "watch.debounce_ms":
 		return strconv.Itoa(global.Watch.DebounceMs)
+	case "embedding.enabled":
+		return strconv.FormatBool(global.Embedding.Enabled)
+	case "embedding.base_url":
+		return global.Embedding.BaseURL
+	case "embedding.api_key":
+		return global.Embedding.APIKey
+	case "embedding.model":
+		return global.Embedding.Model
+	case "embedding.batch_size":
+		return strconv.Itoa(global.Embedding.BatchSize)
+	case "embedding.max_text_chars":
+		return strconv.Itoa(global.Embedding.MaxTextChars)
+	case "embedding.timeout_secs":
+		return strconv.Itoa(global.Embedding.TimeoutSecs)
+	case "embedding.hybrid_weight":
+		return strconv.FormatFloat(global.Embedding.HybridWeight, 'f', -1, 64)
 	case "ingest.auto_commit":
 		return strconv.FormatBool(resolved.Ingest.AutoCommit)
 	case "history.follow":
@@ -792,7 +843,9 @@ func SetWikiConfigValue(w *WikiConfig, key, value string) error {
 	case "graph.max_nodes_for_diameter":
 		return withGraph(w, func(g *GraphConfig) error { return applyInt(&g.MaxNodesForDiameter, parseInt) })
 	case "global.default_wiki", "index.auto_rebuild", "index.auto_recovery",
-		"index.memory_budget_mb", "index.tokenizer", "serve.http", "serve.http_port",
+		"index.memory_budget_mb", "index.tokenizer", "embedding.enabled", "embedding.base_url",
+		"embedding.api_key", "embedding.model", "embedding.batch_size", "embedding.max_text_chars",
+		"embedding.timeout_secs", "embedding.hybrid_weight", "serve.http", "serve.http_port",
 		"serve.http_allowed_hosts", "serve.acp", "serve.max_restarts", "serve.restart_backoff",
 		"serve.heartbeat_secs", "serve.acp_max_sessions", "logging.log_path",
 		"logging.log_rotation", "logging.log_max_files", "logging.log_format", "watch.debounce_ms":

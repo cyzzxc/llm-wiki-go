@@ -18,10 +18,14 @@ built = '2026-08-16T01:32:32+08:00'        # RFC3339；缺席 = 从未构建
 pages = 3
 sections = 0
 commit = '<构建时的 git HEAD>'              # 增量更新锚点
+embedding_model = 'qwen3-embedding-8b'     # Go 增量：向量空间锚点；空 = 无向量
+embedding_dims = 4096
 [types]
 concept = '<per-type hash>'
 ...
 ```
+
+**嵌入 pass**（`[embedding]` 启用时挂载客户端）：Rebuild/RebuildTypes 嵌全部文档；Update 只嵌无向量的新增/变更文档。向量随 index.gob 持久化；嵌入失败降级为无向量并告警（keyword 模式不受影响）；模型变更 → staleness 判 FullRebuildNeeded（向量空间不可混用）。
 
 **gob 陷阱**：`SearchIndex` 的 `bySlug/df/totalLen` 是未导出派生结构，gob 不编码。解码路径（`loadIndex`）必须调 `rebuildStats()` 重算——漏掉即跨进程检索静默为空（历史 bug，已固化回归测试 `TestSearchAcrossProcessReload`）。
 

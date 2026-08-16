@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"llm-wiki-go/internal/embed"
 	"llm-wiki-go/internal/tokenizer"
 )
 
@@ -64,7 +65,15 @@ type PageList struct {
 	Facets   FacetCounts   `json:"facets,omitempty"`
 }
 
-// SearchOptions parameterize a BM25 search.
+// Search modes: keyword (BM25, default), semantic (embedding cosine),
+// hybrid (weighted blend).
+const (
+	ModeKeyword  = "keyword"
+	ModeSemantic = "semantic"
+	ModeHybrid   = "hybrid"
+)
+
+// SearchOptions parameterize a search.
 type SearchOptions struct {
 	NoExcerpt       bool
 	IncludeSections bool
@@ -72,6 +81,9 @@ type SearchOptions struct {
 	Type            string
 	FacetsTopTags   int
 	SearchConfig    SearchConfig
+	Mode            string    // keyword | semantic | hybrid
+	QueryEmbedding  []float32 // required for semantic/hybrid
+	HybridWeight    float64   // cosine share in hybrid (default 0.5)
 }
 
 // DefaultSearchOptions mirrors the Rust defaults.
@@ -92,8 +104,14 @@ type ListOptions struct {
 	FacetsTopTags int
 }
 
-// Search runs a BM25 query against one index.
+// Search runs a query against one index. Modes: keyword (BM25),
+// semantic (cosine over doc embeddings — docs without vectors are
+// excluded), hybrid (BM25 max-normalized blended with cosine).
 func Search(queryStr string, opts SearchOptions, ix *SearchIndex, tok *tokenizer.Tokenizer) (*SearchResult, error) {
+	mode := opts.Mode
+	if mode == "" {
+		mode = ModeKeyword
+	}
 	matches := matchingDocs(ix, opts.IncludeSections, opts.Type)
 
 	terms := tok.Tokens(queryStr)
@@ -102,9 +120,10 @@ func Search(queryStr string, opts SearchOptions, ix *SearchIndex, tok *tokenizer
 		score float64
 	}
 	var hits []scored
+
 	avg := ix.AvgLen()
 	n := float64(len(ix.Docs))
-	for _, d := range matches {
+	bm25Of := func(d *IndexDoc) float64 {
 		score := 0.0
 		for _, term := range terms {
 			tf := float64(d.TF[term])
@@ -116,11 +135,67 @@ func Search(queryStr string, opts SearchOptions, ix *SearchIndex, tok *tokenizer
 			denom := tf + bm25K1*(1-bm25B+bm25B*float64(d.Len)/avg)
 			score += idf * tf * (bm25K1 + 1) / denom
 		}
-		if score <= 0 {
-			continue
-		}
-		hits = append(hits, scored{d, score * statusMultiplier(opts.SearchConfig, d.Status) * confidenceMultiplier(d)})
+		return score
 	}
+
+	switch mode {
+	case ModeSemantic:
+		if opts.QueryEmbedding == nil {
+			return nil, fmt.Errorf("semantic mode requires a query embedding")
+		}
+		for _, d := range matches {
+			if d.Embedding == nil {
+				continue
+			}
+			score := embed.Cosine(opts.QueryEmbedding, d.Embedding)
+			hits = append(hits, scored{d, score * statusMultiplier(opts.SearchConfig, d.Status) * confidenceMultiplier(d)})
+		}
+	case ModeHybrid:
+		if opts.QueryEmbedding == nil {
+			return nil, fmt.Errorf("hybrid mode requires a query embedding")
+		}
+		// first pass: raw BM25 to find the max for normalization
+		maxBM25 := 0.0
+		bm25 := make(map[*IndexDoc]float64, len(matches))
+		for _, d := range matches {
+			s := bm25Of(d)
+			bm25[d] = s
+			if s > maxBM25 {
+				maxBM25 = s
+			}
+		}
+		w := opts.HybridWeight
+		if w <= 0 {
+			w = 0.5
+		}
+		for _, d := range matches {
+			bm := 0.0
+			if maxBM25 > 0 {
+				bm = bm25[d] / maxBM25
+			}
+			cos := 0.0
+			if d.Embedding != nil {
+				cos = embed.Cosine(opts.QueryEmbedding, d.Embedding)
+				if cos < 0 {
+					cos = 0 // negative similarity contributes nothing in the blend
+				}
+			}
+			score := w*cos + (1-w)*bm
+			if score <= 0 {
+				continue
+			}
+			hits = append(hits, scored{d, score * statusMultiplier(opts.SearchConfig, d.Status) * confidenceMultiplier(d)})
+		}
+	default: // keyword
+		for _, d := range matches {
+			score := bm25Of(d)
+			if score <= 0 {
+				continue
+			}
+			hits = append(hits, scored{d, score * statusMultiplier(opts.SearchConfig, d.Status) * confidenceMultiplier(d)})
+		}
+	}
+
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].score != hits[j].score {
 			return hits[i].score > hits[j].score
@@ -142,6 +217,14 @@ func Search(queryStr string, opts SearchOptions, ix *SearchIndex, tok *tokenizer
 		}
 		if !opts.NoExcerpt {
 			e := makeExcerpt(h.doc.Body, terms)
+			if mode == ModeSemantic {
+				// no query terms to highlight — use summary or body head
+				if h.doc.Summary != "" {
+					e = html.EscapeString(h.doc.Summary)
+				} else {
+					e = escapeAndWindow(h.doc.Body, 0, excerptRadius)
+				}
+			}
 			pr.Excerpt = &e
 		}
 		if h.doc.Summary != "" {

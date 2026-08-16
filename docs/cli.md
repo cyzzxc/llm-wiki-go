@@ -42,7 +42,8 @@ llm-wiki content commit [slugs…] [--all] [-m MSG]
 ## 检索
 
 ```
-llm-wiki search <query> [--type T] [--no-excerpt] [--top-k N] [--include-sections] [--cross-wiki] [--format json|llms]
+llm-wiki search <query> [--type T] [--no-excerpt] [--top-k N] [--include-sections] [--cross-wiki] [--semantic|--hybrid] [--format json|llms]
+  # --semantic 向量召回 / --hybrid 混合排序（需 [embedding] 配置，见 docs/search.md）
   # 文本块：slug:/uri:/title:/score:/(excerpt:) + 空行
 llm-wiki list [--type T] [--status S] [--page N] [--page-size N] [--format json|llms]
   # 文本行 "%-40s %-16s %-8s %s"（slug/type/status/title）+ "Page x/y (N total)"

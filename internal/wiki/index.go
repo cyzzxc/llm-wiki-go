@@ -1,6 +1,7 @@
 package wiki
 
 import (
+	"context"
 	"encoding/gob"
 	"fmt"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
+	embedpkg "llm-wiki-go/internal/embed"
 	"llm-wiki-go/internal/tokenizer"
 )
 
@@ -47,6 +49,9 @@ type IndexDoc struct {
 	Body        string // raw body for excerpts and exports
 	TF          map[string]int
 	Len         int
+	// Embedding is the unit-normalized semantic vector; nil when the
+	// embedding pass did not run for this doc.
+	Embedding []float32
 }
 
 // SearchIndex is an immutable in-memory BM25 index over the wiki pages.
@@ -303,6 +308,10 @@ type IndexState struct {
 	Sections   int               `toml:"sections"`
 	Commit     string            `toml:"commit"`
 	Types      map[string]string `toml:"types"`
+	// EmbeddingModel pins the vector space: index and query must use the
+	// same model; a change forces a full re-embed. Empty = no embeddings.
+	EmbeddingModel string `toml:"embedding_model"`
+	EmbeddingDims  int    `toml:"embedding_dims"`
 }
 
 // IndexReport describes a full rebuild.
@@ -321,12 +330,14 @@ type UpdateReport struct {
 
 // IndexStatus is the health snapshot for wiki_index_status.
 type IndexStatus struct {
-	Built     *string `json:"built"`
-	Pages     int     `json:"pages"`
-	Sections  int     `json:"sections"`
-	Stale     bool    `json:"stale"`
-	Openable  bool    `json:"openable"`
-	Queryable bool    `json:"queryable"`
+	Built          *string `json:"built"`
+	Pages          int     `json:"pages"`
+	Sections       int     `json:"sections"`
+	Stale          bool    `json:"stale"`
+	Openable       bool    `json:"openable"`
+	Queryable      bool    `json:"queryable"`
+	EmbeddingModel string  `json:"embedding_model,omitempty"`
+	EmbeddingDims  int     `json:"embedding_dims,omitempty"`
 }
 
 // StalenessKind classifies why an index is stale.
@@ -351,11 +362,43 @@ type IndexManager struct {
 	changedTypes []string
 	generation   atomic.Uint64
 	tokenizer    *tokenizer.Tokenizer
+	// embedClient, when non-nil, runs the embedding pass on rebuild/update.
+	embedClient *embedpkg.Client
 }
 
 // NewIndexManager creates a manager; the index is loaded lazily.
 func NewIndexManager(wikiName, indexPath string, tok *tokenizer.Tokenizer) *IndexManager {
 	return &IndexManager{WikiName: wikiName, IndexPath: indexPath, tokenizer: tok}
+}
+
+// SetEmbedClient attaches (or detaches with nil) the embedding client.
+func (m *IndexManager) SetEmbedClient(c *embedpkg.Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.embedClient = c
+}
+
+// embedDocs fills doc embeddings in place via the attached client.
+// Deterministic, batched, progress logged every ~10 batches.
+func (m *IndexManager) embedDocs(docs []*IndexDoc) {
+	c := m.embedClient
+	if c == nil {
+		return
+	}
+	texts := make([]string, len(docs))
+	for i, d := range docs {
+		texts[i] = c.EmbedText(d.Title, d.Summary, d.Body)
+	}
+	vecs, err := c.Embed(context.Background(), texts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: embedding pass failed (index kept without vectors): %v\n", err)
+		return
+	}
+	for i, d := range docs {
+		if i < len(vecs) {
+			d.Embedding = vecs[i]
+		}
+	}
 }
 
 // Searcher returns the current in-memory index (nil if never built).
@@ -487,6 +530,7 @@ func (m *IndexManager) Rebuild(wikiRoot, repoRoot string, is *IndexSchema, regis
 		return IndexReport{}, err
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Slug < docs[j].Slug })
+	m.embedDocs(docs)
 	index := NewSearchIndex(docs, m.tokenizer.Name())
 
 	pages, sections := 0, 0
@@ -504,6 +548,15 @@ func (m *IndexManager) Rebuild(wikiRoot, repoRoot string, is *IndexSchema, regis
 		Commit:     GitCurrentHead(repoRoot),
 		Types:      registry.PerTypeHashes,
 		SchemaHash: registry.GlobalHash,
+	}
+	if m.embedClient != nil {
+		st.EmbeddingModel = m.embedClient.Model()
+		for _, d := range docs {
+			if d.Embedding != nil {
+				st.EmbeddingDims = len(d.Embedding)
+				break
+			}
+		}
 	}
 	if err := m.persist(index, st); err != nil {
 		return IndexReport{}, err
@@ -564,6 +617,24 @@ func (m *IndexManager) Update(wikiRoot, repoRoot string, lastCommit string, is *
 		report.Updated++
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Slug < docs[j].Slug })
+	if m.embedClient != nil {
+		var fresh []*IndexDoc
+		for _, d := range docs {
+			if d.Embedding == nil {
+				fresh = append(fresh, d)
+			}
+		}
+		m.embedDocs(fresh) // only docs without vectors (new/changed)
+	}
+	if m.embedClient != nil {
+		var fresh []*IndexDoc
+		for _, d := range docs {
+			if d.Embedding == nil {
+				fresh = append(fresh, d)
+			}
+		}
+		m.embedDocs(fresh) // only new/changed docs; others keep vectors
+	}
 	index := NewSearchIndex(docs, m.tokenizer.Name())
 
 	pages, sections := 0, 0
@@ -584,6 +655,17 @@ func (m *IndexManager) Update(wikiRoot, repoRoot string, lastCommit string, is *
 	st.Commit = GitCurrentHead(repoRoot)
 	st.Types = registry.PerTypeHashes
 	st.SchemaHash = registry.GlobalHash
+	if m.embedClient != nil {
+		st.EmbeddingModel = m.embedClient.Model()
+		for _, d := range docs {
+			if d.Embedding != nil {
+				st.EmbeddingDims = len(d.Embedding)
+				break
+			}
+		}
+	} else {
+		st.EmbeddingModel, st.EmbeddingDims = "", 0
+	}
 	if err := m.persist(index, st); err != nil {
 		return report, err
 	}
@@ -636,6 +718,7 @@ func (m *IndexManager) RebuildTypes(types []string, wikiRoot, repoRoot string, i
 		return err
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Slug < docs[j].Slug })
+	m.embedDocs(docs)
 	index := NewSearchIndex(docs, m.tokenizer.Name())
 	st := m.state
 	st.Built = time.Now().Format(time.RFC3339)
@@ -644,6 +727,9 @@ func (m *IndexManager) RebuildTypes(types []string, wikiRoot, repoRoot string, i
 	st.Commit = GitCurrentHead(repoRoot)
 	st.Types = registry.PerTypeHashes
 	st.SchemaHash = registry.GlobalHash
+	if m.embedClient != nil {
+		st.EmbeddingModel = m.embedClient.Model()
+	}
 	if err := m.persist(index, st); err != nil {
 		return err
 	}
@@ -658,12 +744,19 @@ func (m *IndexManager) Status(repoRoot string) *IndexStatus {
 	st := m.loadState()
 	diskGlobal, _, err := ComputeDiskHashes(repoRoot)
 	head := GitCurrentHead(repoRoot)
+	expectedModel := ""
+	if m.embedClient != nil {
+		expectedModel = m.embedClient.Model()
+	}
 	status := &IndexStatus{
-		Pages:     st.Pages,
-		Sections:  st.Sections,
-		Stale:     st.Built == "" || st.Commit != head || err != nil || st.SchemaHash != diskGlobal,
-		Openable:  fileExists(m.dataPath()),
-		Queryable: false,
+		Pages:    st.Pages,
+		Sections: st.Sections,
+		Stale: st.Built == "" || st.Commit != head || err != nil || st.SchemaHash != diskGlobal ||
+			embedModelMismatch(st, expectedModel),
+		Openable:       fileExists(m.dataPath()),
+		Queryable:      false,
+		EmbeddingModel: st.EmbeddingModel,
+		EmbeddingDims:  st.EmbeddingDims,
 	}
 	if st.Built != "" {
 		b := st.Built
@@ -677,10 +770,25 @@ func (m *IndexManager) Status(repoRoot string) *IndexStatus {
 	return status
 }
 
-// Staleness classifies the staleness for smart rebuilds.
-func (m *IndexManager) Staleness(repoRoot string) StalenessKind {
+// embedModelMismatch reports a vector-space change: state was built with
+// a different embedding model than currently configured (including
+// enabled↔disabled transitions with existing vectors).
+func embedModelMismatch(st IndexState, expectedModel string) bool {
+	if expectedModel != "" {
+		return st.EmbeddingModel != expectedModel
+	}
+	return false // embedding disabled: stale vectors are harmless, not stale state
+}
+
+// Staleness classifies the staleness for smart rebuilds. embedModel is
+// the currently configured embedding model ("" = disabled); a mismatch
+// with state forces a full rebuild.
+func (m *IndexManager) Staleness(repoRoot, embedModel string) StalenessKind {
 	st := m.loadState()
 	if st.Built == "" {
+		return StalenessFullRebuildNeeded
+	}
+	if embedModelMismatch(st, embedModel) {
 		return StalenessFullRebuildNeeded
 	}
 	diskGlobal, diskPerType, err := ComputeDiskHashes(repoRoot)

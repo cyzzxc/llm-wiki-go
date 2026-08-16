@@ -1,12 +1,16 @@
 package wiki
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
+
+	embedpkg "llm-wiki-go/internal/embed"
 )
 
-// SearchParams parameterize the search ops entry point.
+// SearchParams parameterize the search ops entry point. Mode selects
+// keyword (default) / semantic / hybrid ranking.
 type SearchParams struct {
 	Query           string
 	TypeFilter      string
@@ -14,6 +18,7 @@ type SearchParams struct {
 	TopK            int
 	IncludeSections bool
 	CrossWiki       bool
+	Mode            string
 }
 
 // OpsSearch runs a search against one wiki or all mounted wikis.
@@ -22,6 +27,23 @@ func OpsSearch(engine *WikiEngine, wikiName string, p SearchParams) (*SearchResu
 	if err != nil {
 		return nil, err
 	}
+	mode := p.Mode
+	if mode == "" {
+		mode = ModeKeyword
+	}
+	var queryEmb []float32
+	if mode != ModeKeyword {
+		if space.Embed == nil {
+			return nil, fmt.Errorf("semantic search not configured — set [embedding] in config and rebuild the index")
+		}
+		vecs, err := space.Embed.Embed(context.Background(), []string{p.Query})
+		if err != nil {
+			return nil, fmt.Errorf("query embedding failed: %w", err)
+		}
+		if len(vecs) > 0 {
+			queryEmb = vecs[0]
+		}
+	}
 	opts := SearchOptions{
 		NoExcerpt:       p.NoExcerpt,
 		IncludeSections: p.IncludeSections,
@@ -29,6 +51,9 @@ func OpsSearch(engine *WikiEngine, wikiName string, p SearchParams) (*SearchResu
 		Type:            p.TypeFilter,
 		FacetsTopTags:   space.Resolved.Defaults.FacetsTopTags,
 		SearchConfig:    space.Resolved.Search,
+		Mode:            mode,
+		QueryEmbedding:  queryEmb,
+		HybridWeight:    embedWeightFrom(space),
 	}
 	ix := space.IndexManager.Searcher()
 	if ix == nil {
@@ -285,6 +310,15 @@ func suggestField(registry *TypeRegistry, sourceType, candidateType string) stri
 		}
 	}
 	return "[[wikilink]]"
+}
+
+// embedWeightFrom returns the hybrid blend weight (default 0.5) from
+// the engine-global embedding config.
+func embedWeightFrom(space *SpaceContext) float64 {
+	if space.Embed != nil {
+		return space.Embed.Config().HybridWeight
+	}
+	return embedpkg.Defaults().HybridWeight
 }
 
 func orDefault(v, def int) int {

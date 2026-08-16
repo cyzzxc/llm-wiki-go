@@ -91,6 +91,16 @@ log_format = "text"            # text | json
 [watch]
 debounce_ms = 500
 
+[embedding]                   # 语义搜索（Go 版增量；global-only，默认关）
+enabled = false               # 关闭 = 引擎完全离线，纯 BM25
+base_url = ""                 # OpenAI 兼容网关，如 http://192.168.6.2:48080/v1
+api_key = ""                  # 或环境变量 LLM_WIKI_EMBEDDING_API_KEY（优先）
+model = "qwen3-embedding-8b"  # ★ 索引与查询必须同模型；换模型自动触发全量重建
+batch_size = 16               # 每次 /embeddings 请求的文本数（批量摊薄 ~1.4s/条延迟）
+max_text_chars = 4000         # 每页嵌入文本截断（title+summary+body，rune 计）
+timeout_secs = 60
+hybrid_weight = 0.5           # hybrid 模式余弦权重（1−w 给归一化 BM25）
+
 [redact]                       # ◈
 disable = []
 patterns = []                  # [{name, pattern, replacement}] 见 docs/ingestion.md
@@ -124,3 +134,4 @@ description = "…"
 |---|---|
 | `LLM_WIKI_CONFIG` | 配置文件路径 |
 | `LLM_WIKI_LOG_LEVEL` | serve 日志级别（debug/warn/error，默认 info） |
+| `LLM_WIKI_EMBEDDING_API_KEY` | 覆盖 `[embedding] api_key`（避免明文落盘） |

@@ -61,6 +61,16 @@ llm-wiki serve            # MCP stdio server（接入 Claude / Zed 等）
 tokenizer = "auto"   # auto | gse | simple（en_stem 为兼容别名）
 ```
 
+语义搜索（可选）：配置 OpenAI 兼容嵌入网关后，`wiki_search` 获得 `semantic`（纯向量召回）与 `hybrid`（混合排序）模式——可召回同义改写、跨语言等无词面重叠的内容；默认关闭，未启用时引擎完全离线。详见 [docs/search.md](docs/search.md)。
+
+```toml
+[embedding]
+enabled = true
+base_url = "http://192.168.6.2:48080/v1"   # 例：AxonHub 网关
+model = "qwen3-embedding-8b"               # 索引与查询必须同模型
+# api_key 建议走环境变量 LLM_WIKI_EMBEDDING_API_KEY
+```
+
 实现要点：
 
 - **词典内嵌**：jieba 词频词典（~35 万词，4.9MB，经 [go-ego/gse](https://github.com/go-ego/gse) Apache-2.0 格式）编译进二进制，单文件分发，无外部依赖。

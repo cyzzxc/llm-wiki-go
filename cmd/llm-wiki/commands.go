@@ -312,6 +312,12 @@ func (c *cli) cmdSearch(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: search <query> [--type] [--no-excerpt] [--top-k] [--format]")
 		return 2
 	}
+	mode := "keyword"
+	if flagBool(flags, "semantic") {
+		mode = "semantic"
+	} else if flagBool(flags, "hybrid") {
+		mode = "hybrid"
+	}
 	result, err := wiki.OpsSearch(c.engineOrDie(), c.wikiName(), wiki.SearchParams{
 		Query:           query,
 		TypeFilter:      flags["type"],
@@ -319,6 +325,7 @@ func (c *cli) cmdSearch(args []string) int {
 		TopK:            flagInt(flags, "top-k", 0),
 		IncludeSections: flagBool(flags, "include-sections"),
 		CrossWiki:       flagBool(flags, "cross-wiki"),
+		Mode:            mode,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

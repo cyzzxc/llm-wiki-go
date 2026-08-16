@@ -78,6 +78,23 @@ unknown  = 0.9
 
 无 tantivy QueryParser 语法（`field:term`、`+must`、通配）。查询串整体分词后 OR 语义；解析失败的宽容路径不存在于 Go 版（原版的 lenient 解析主要为兜底语法错误）。若未来需要 field 查询，在 `OpsSearch` 前解析 `type:` 前缀即可。
 
+## 语义检索（embedding）与混合模式
+
+Go 版增量功能（Rust 原版无）。`[embedding]` 配置并 `index rebuild` 后可用：
+
+| 模式 | 排序依据 | 说明 |
+|---|---|---|
+| `keyword`（默认） | BM25 | 行为与本文件前文一致；未配置嵌入时的唯一模式 |
+| `semantic` | 余弦相似度（单位向量点积） | 只含带向量的文档；查询经同一网关嵌入。可召回同义改写、跨语言等**无词面重叠**内容 |
+| `hybrid` | `w·cos + (1−w)·bm25/max(bm25)` | BM25 按结果集最大值归一到 [0,1]；负余弦按 0 计；无向量的文档仅靠关键词侧得分 |
+
+- 嵌入文本：`title + "\n" + summary + "\n" + body`，按 `max_text_chars`（rune）截断——确定性，重建可复现。
+- 向量在索引时**批量**生成（`batch_size` 条/请求），单位化后随 index.gob 持久化（4096 维 float32 ≈ 16KB/页）。
+- 三种模式都套用 status/confidence 乘子；semantic 的摘要取 summary（无则正文头部），无词可高亮。
+- **同模型硬约束**：`state.toml` 记录 `embedding_model`；配置换模型 → 索引判定 stale → 全量重建（向量空间不可混用）。
+- 未配置嵌入而请求 semantic/hybrid → 错误 `semantic search not configured — set [embedding] in config and rebuild the index`。
+- 成本参考（AxonHub / qwen3-embedding-8b）：~1.4s/条，批量摊薄；2 页库重建 2.2s；semantic/hybrid 查询每次 1 次网关往返。
+
 ## llms 渲染
 
 - `render_search_llms`：`- [title](uri): summary` 行列表，无得分无摘要块。

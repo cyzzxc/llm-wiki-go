@@ -422,6 +422,7 @@ func (s *Server) registerTools() {
 			"top_k":            intProp("Max results"),
 			"wiki":             strProp("Target wiki name"),
 			"cross_wiki":       boolProp("Search across all wikis"),
+			"mode":             strProp("Ranking mode: keyword (BM25, default) | semantic (embedding cosine — requires [embedding] config) | hybrid (blend)"),
 			"format":           strProp("Output format: json | llms (default: json)"),
 		}, []string{"query"},
 		func(ctx context.Context, ss *mcp.ServerSession, a args) (string, bool, error) {
@@ -440,6 +441,7 @@ func (s *Server) registerTools() {
 				TopK:            a.intVal("top_k"),
 				IncludeSections: a.boolean("include_sections"),
 				CrossWiki:       a.boolean("cross_wiki"),
+				Mode:            a.str("mode"),
 			}
 			result, err := wiki.OpsSearch(e, wikiName, params)
 			if err != nil {

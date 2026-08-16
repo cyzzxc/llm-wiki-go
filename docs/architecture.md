@@ -15,6 +15,7 @@ internal/wiki         ops 层（Ops* 函数）：业务入口，副作用归属�
       ▼
 域模块：slug / frontmatter / page / links / config / gitx /
         schema / index / search / graph / ingest / spaces / engine
+外联（可选）：embed —— OpenAI 兼容嵌入网关（默认关，docs/search.md）
 ```
 
 规则：**传输层零业务逻辑**。`mcpserver` 只做参数解包 → 调 `Ops*` → 格式化输出；`commands.go` 同理。所有副作用（索引刷新、图缓存失效、edge-target 校验、git 提交）在 ops 层或更深的域模块里。
