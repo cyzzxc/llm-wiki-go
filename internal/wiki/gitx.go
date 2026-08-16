@@ -257,6 +257,33 @@ func GitPageHistory(repoRoot, relPath string, limit int, follow bool) ([]History
 	return entries, nil
 }
 
+// GitRecentCommits returns the newest commits for the whole repo
+// (repo-wide changelog for the web home page).
+func GitRecentCommits(repoRoot string, limit int) ([]HistoryEntry, error) {
+	cmd := exec.Command("git", "log", "--format=%H%x00%aI%x00%s%x00%an", "-n", fmt.Sprint(limit))
+	cmd.Dir = repoRoot
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if stderr.Len() == 0 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("git log failed: %s", strings.TrimSpace(stderr.String()))
+	}
+	var entries []HistoryEntry
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x00", 4)
+		if len(parts) == 4 {
+			entries = append(entries, HistoryEntry{Hash: parts[0], Date: parts[1], Message: parts[2], Author: parts[3]})
+		}
+	}
+	return entries, nil
+}
+
 func gitRun(dir string, args ...string) error {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
