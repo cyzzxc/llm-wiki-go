@@ -45,10 +45,10 @@
 ## 不变量（改代码前必读）
 
 1. **ops 层是单一事实源**。CLI（`commands.go`）与 MCP（`mcpserver`）都只调 `Ops*` 函数。副作用（索引刷新、图缓存重建、edge-target 校验）属于 ops 层，不许在调用方补。
-2. **快照/缓存键用 `LastCommit()`（state.toml 里的 git HEAD），不用 `Generation()`**。generation 每次进程重启归零，跨进程不稳定。
+2. **图/社区缓存与快照键用 `LastCommit()`（state.toml 里的 git HEAD），不用 `Generation()`**。generation 每次进程重启归零，跨进程不稳定（曾导致吃过期快照）。
 3. **gob 只编码导出字段**。任何改动 `SearchIndex`/`WikiGraph` 字段后，确认解码路径调用了 `rebuildStats()` / 重建 `adjOut/adjIn`；否则跨进程检索静默为空（踩过）。
 4. **`persist()` 必须同时写 state.toml 和 index.gob**。只写 gob 会让增量更新锚点（last commit）丢失（踩过）。
-5. **git porcelain 必须 `-c core.quotePath=false`**，否则中文路径被 C 转义，changed-paths 匹配失效（踩过）。
+5. **git porcelain 与 diff 必须 `-c core.quotePath=false`**，否则中文路径被 C 转义，changed-paths 匹配失效（踩过）；重命名必须双向记录（新路径 + 旧路径删除）。
 6. **stdio 独占**：ACP 启用时独占 stdin/stdout；HTTP 与 ACP 可共存；MCP stdio 仅在两者都未启用时运行。三者同抢 stdio 会静默吞消息（踩过）。
 7. **索引与查询必须用同一个 tokenizer**（名称记录在索引里，`Open()` 检测变更即强制重建）。查询侧换分词器 = 匹配断裂。
 8. **confidence 缺席是语义**：`Confidence *float64` 为 nil 时乘子取 1.0，绝不伪造 0.5。status 缺席取 `unknown` 乘子（默认 0.9）。

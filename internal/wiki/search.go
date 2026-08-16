@@ -217,14 +217,6 @@ func Search(queryStr string, opts SearchOptions, ix *SearchIndex, tok *tokenizer
 		}
 		if !opts.NoExcerpt {
 			e := makeExcerpt(h.doc.Body, terms)
-			if mode == ModeSemantic {
-				// no query terms to highlight — use summary or body head
-				if h.doc.Summary != "" {
-					e = html.EscapeString(h.doc.Summary)
-				} else {
-					e = escapeAndWindow(h.doc.Body, 0, excerptRadius)
-				}
-			}
 			pr.Excerpt = &e
 		}
 		if h.doc.Summary != "" {
@@ -350,9 +342,11 @@ type NamedIndex struct {
 func SearchAll(queryStr string, opts SearchOptions, wikis []NamedIndex, tok *tokenizer.Tokenizer) (*SearchResult, error) {
 	merged := FacetCounts{Type: map[string]uint64{}, Status: map[string]uint64{}, Tags: map[string]uint64{}}
 	var all []PageRef
+	wikisFailed := 0
 	for _, w := range wikis {
 		sr, err := Search(queryStr, opts, w.Index, tok)
 		if err != nil {
+			wikisFailed++
 			continue
 		}
 		all = append(all, sr.Results...)
@@ -365,6 +359,12 @@ func SearchAll(queryStr string, opts SearchOptions, wikis []NamedIndex, tok *tok
 		for k, v := range sr.Facets.Tags {
 			merged.Tags[k] += v
 		}
+	}
+	// A single failing wiki degrades to partial results; only total
+	// failure surfaces an error (matches the Rust skip-on-error behavior
+	// while still reporting genuine outages).
+	if wikisFailed == len(wikis) && len(wikis) > 0 {
+		return nil, fmt.Errorf("all %d wikis failed to search", wikisFailed)
 	}
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].Score != all[j].Score {

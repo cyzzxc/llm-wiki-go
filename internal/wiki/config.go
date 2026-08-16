@@ -547,6 +547,18 @@ func ConfigValuePath(flagPath string) string {
 	return filepath.Join(home, ".llm-wiki", "config.toml")
 }
 
+// MaskSecret masks a credential for display: empty stays empty, anything
+// else shows first 3 + last 4 characters.
+func MaskSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 8 {
+		return "***"
+	}
+	return s[:3] + "…" + s[len(s)-4:]
+}
+
 // searchStatusKey extracts the status name from a "search.status.<status>" key.
 func searchStatusKey(key string) (string, bool) {
 	rest, ok := strings.CutPrefix(key, "search.status.")
@@ -755,7 +767,7 @@ func GetConfigValue(resolved *ResolvedConfig, global *GlobalConfig, key string) 
 	case "embedding.base_url":
 		return global.Embedding.BaseURL
 	case "embedding.api_key":
-		return global.Embedding.APIKey
+		return MaskSecret(global.Embedding.APIKey)
 	case "embedding.model":
 		return global.Embedding.Model
 	case "embedding.batch_size":

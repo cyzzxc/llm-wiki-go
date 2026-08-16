@@ -43,7 +43,7 @@ func OpsIngest(engine *WikiEngine, wikiName, path string, dryRun, redact bool) (
 		opts.ChangedPaths = changed
 	}
 
-	report, err := Ingest(path, opts, space.WikiRoot, space.TypeRegistry, space.Resolved.Validation)
+	report, err := Ingest(path, opts, space.WikiRoot, space.RepoRoot, space.TypeRegistry, space.Resolved.Validation)
 	if err != nil {
 		return nil, nil, err
 	}

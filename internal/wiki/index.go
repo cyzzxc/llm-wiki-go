@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path"
@@ -364,6 +365,9 @@ type IndexManager struct {
 	tokenizer    *tokenizer.Tokenizer
 	// embedClient, when non-nil, runs the embedding pass on rebuild/update.
 	embedClient *embedpkg.Client
+	// writeMu serializes writers (Rebuild/Update/RebuildTypes); m.mu stays
+	// short-held so searches never block on embedding or git IO.
+	writeMu sync.Mutex
 }
 
 // NewIndexManager creates a manager; the index is loaded lazily.
@@ -378,12 +382,12 @@ func (m *IndexManager) SetEmbedClient(c *embedpkg.Client) {
 	m.embedClient = c
 }
 
-// embedDocs fills doc embeddings in place via the attached client.
-// Deterministic, batched, progress logged every ~10 batches.
-func (m *IndexManager) embedDocs(docs []*IndexDoc) {
-	c := m.embedClient
-	if c == nil {
-		return
+// embedDocs fills doc embeddings in place via the given client and
+// returns the vector dimensionality (0 when nothing was embedded).
+// Must be called WITHOUT m.mu held — it performs network requests.
+func (m *IndexManager) embedDocs(c *embedpkg.Client, docs []*IndexDoc) (dims int) {
+	if c == nil || len(docs) == 0 {
+		return 0
 	}
 	texts := make([]string, len(docs))
 	for i, d := range docs {
@@ -392,13 +396,17 @@ func (m *IndexManager) embedDocs(docs []*IndexDoc) {
 	vecs, err := c.Embed(context.Background(), texts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: embedding pass failed (index kept without vectors): %v\n", err)
-		return
+		return 0
 	}
 	for i, d := range docs {
 		if i < len(vecs) {
 			d.Embedding = vecs[i]
 		}
 	}
+	if len(vecs) > 0 {
+		dims = len(vecs[0])
+	}
+	return dims
 }
 
 // Searcher returns the current in-memory index (nil if never built).
@@ -530,17 +538,13 @@ func (m *IndexManager) Rebuild(wikiRoot, repoRoot string, is *IndexSchema, regis
 		return IndexReport{}, err
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Slug < docs[j].Slug })
-	m.embedDocs(docs)
+	m.mu.RLock()
+	embedder := m.embedClient
+	m.mu.RUnlock()
+	dims := m.embedDocs(embedder, docs)
 	index := NewSearchIndex(docs, m.tokenizer.Name())
 
-	pages, sections := 0, 0
-	for _, d := range docs {
-		if d.Type == "section" {
-			sections++
-		} else {
-			pages++
-		}
-	}
+	pages, sections := countPagesSections(docs)
 	st := IndexState{
 		Built:      time.Now().Format(time.RFC3339),
 		Pages:      pages,
@@ -549,15 +553,7 @@ func (m *IndexManager) Rebuild(wikiRoot, repoRoot string, is *IndexSchema, regis
 		Types:      registry.PerTypeHashes,
 		SchemaHash: registry.GlobalHash,
 	}
-	if m.embedClient != nil {
-		st.EmbeddingModel = m.embedClient.Model()
-		for _, d := range docs {
-			if d.Embedding != nil {
-				st.EmbeddingDims = len(d.Embedding)
-				break
-			}
-		}
-	}
+	st = applyEmbedState(st, embedder, dims)
 	if err := m.persist(index, st); err != nil {
 		return IndexReport{}, err
 	}
@@ -569,15 +565,20 @@ func (m *IndexManager) Rebuild(wikiRoot, repoRoot string, is *IndexSchema, regis
 	return IndexReport{Wiki: m.WikiName, PagesIndexed: len(docs), Skipped: skipped, DurationMs: time.Since(start).Milliseconds()}, nil
 }
 
-// Update applies git-detected changes since lastCommit.
+// Update applies git-detected changes since lastCommit. Writers are
+// serialized by writeMu; m.mu is only held for snapshot/install so
+// concurrent searches never wait on embedding or git IO.
 func (m *IndexManager) Update(wikiRoot, repoRoot string, lastCommit string, is *IndexSchema, registry *TypeRegistry) (UpdateReport, error) {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+
 	changes := CollectChangedFiles(repoRoot, wikiRoot, lastCommit)
 	if len(changes) == 0 {
 		return UpdateReport{}, nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
+	// 1. short lock: snapshot docs/state, detach the embed client
+	m.mu.Lock()
 	var docs []*IndexDoc
 	if m.index != nil {
 		docs = append(docs, m.index.Docs...)
@@ -585,7 +586,16 @@ func (m *IndexManager) Update(wikiRoot, repoRoot string, lastCommit string, is *
 		docs = loaded.Docs
 		m.index = loaded
 	}
+	prev := m.state
+	if prev.Types == nil {
+		prev = m.loadState()
+	}
+	embedder := m.embedClient
+	m.mu.Unlock()
 
+	// 2. lock-free: apply changes to the private copy. Fresh IndexDoc
+	// objects are invisible to readers until install; retained docs keep
+	// their vectors, so only fresh ones get (re)embedded.
 	bySlug := map[string]int{}
 	for i, d := range docs {
 		bySlug[d.Slug] = i
@@ -617,27 +627,42 @@ func (m *IndexManager) Update(wikiRoot, repoRoot string, lastCommit string, is *
 		report.Updated++
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Slug < docs[j].Slug })
-	if m.embedClient != nil {
+	var dims int
+	if embedder != nil {
 		var fresh []*IndexDoc
 		for _, d := range docs {
 			if d.Embedding == nil {
 				fresh = append(fresh, d)
 			}
 		}
-		m.embedDocs(fresh) // only docs without vectors (new/changed)
+		dims = m.embedDocs(embedder, fresh)
 	}
-	if m.embedClient != nil {
-		var fresh []*IndexDoc
-		for _, d := range docs {
-			if d.Embedding == nil {
-				fresh = append(fresh, d)
-			}
-		}
-		m.embedDocs(fresh) // only new/changed docs; others keep vectors
-	}
-	index := NewSearchIndex(docs, m.tokenizer.Name())
 
-	pages, sections := 0, 0
+	// 3. short lock: install
+	index := NewSearchIndex(docs, m.tokenizer.Name())
+	pages, sections := countPagesSections(docs)
+	st := prev
+	st.Built = time.Now().Format(time.RFC3339)
+	st.Pages = pages
+	st.Sections = sections
+	st.Commit = GitCurrentHead(repoRoot)
+	st.Types = registry.PerTypeHashes
+	st.SchemaHash = registry.GlobalHash
+	st = applyEmbedState(st, embedder, dims)
+
+	m.mu.Lock()
+	if err := m.persist(index, st); err != nil {
+		m.mu.Unlock()
+		return report, err
+	}
+	m.index = index
+	m.state = st
+	m.mu.Unlock()
+	m.generation.Add(1)
+	return report, nil
+}
+
+func countPagesSections(docs []*IndexDoc) (pages, sections int) {
 	for _, d := range docs {
 		if d.Type == "section" {
 			sections++
@@ -645,34 +670,7 @@ func (m *IndexManager) Update(wikiRoot, repoRoot string, lastCommit string, is *
 			pages++
 		}
 	}
-	st := m.state
-	if st.Types == nil {
-		st = m.loadState()
-	}
-	st.Built = time.Now().Format(time.RFC3339)
-	st.Pages = pages
-	st.Sections = sections
-	st.Commit = GitCurrentHead(repoRoot)
-	st.Types = registry.PerTypeHashes
-	st.SchemaHash = registry.GlobalHash
-	if m.embedClient != nil {
-		st.EmbeddingModel = m.embedClient.Model()
-		for _, d := range docs {
-			if d.Embedding != nil {
-				st.EmbeddingDims = len(d.Embedding)
-				break
-			}
-		}
-	} else {
-		st.EmbeddingModel, st.EmbeddingDims = "", 0
-	}
-	if err := m.persist(index, st); err != nil {
-		return report, err
-	}
-	m.index = index
-	m.state = st
-	m.generation.Add(1)
-	return report, nil
+	return pages, sections
 }
 
 func reindexBySlug(bySlug map[string]int, docs []*IndexDoc) {
@@ -684,14 +682,32 @@ func reindexBySlug(bySlug map[string]int, docs []*IndexDoc) {
 	}
 }
 
-// RebuildTypes reindexes only the docs of the given types.
+// applyEmbedState records the embedding anchor on the index state.
+func applyEmbedState(st IndexState, embedder *embedpkg.Client, dims int) IndexState {
+	if embedder != nil {
+		st.EmbeddingModel = embedder.Model()
+		if dims > 0 {
+			st.EmbeddingDims = dims
+		}
+	} else {
+		st.EmbeddingModel, st.EmbeddingDims = "", 0
+	}
+	return st
+}
+
+// RebuildTypes reindexes only the docs of the given types. Same locking
+// discipline as Update: writers serialized, m.mu held only for
+// snapshot/install, embedding runs lock-free.
 func (m *IndexManager) RebuildTypes(types []string, wikiRoot, repoRoot string, is *IndexSchema, registry *TypeRegistry) error {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+
 	typeSet := map[string]bool{}
 	for _, t := range types {
 		typeSet[t] = true
 	}
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	var docs []*IndexDoc
 	if m.index != nil {
 		for _, d := range m.index.Docs {
@@ -700,6 +716,10 @@ func (m *IndexManager) RebuildTypes(types []string, wikiRoot, repoRoot string, i
 			}
 		}
 	}
+	prev := m.state
+	embedder := m.embedClient
+	m.mu.Unlock()
+
 	err := filepath.WalkDir(wikiRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -718,23 +738,36 @@ func (m *IndexManager) RebuildTypes(types []string, wikiRoot, repoRoot string, i
 		return err
 	}
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Slug < docs[j].Slug })
-	m.embedDocs(docs)
+	var dims int
+	if embedder != nil {
+		var fresh []*IndexDoc
+		for _, d := range docs {
+			if d.Embedding == nil {
+				fresh = append(fresh, d)
+			}
+		}
+		dims = m.embedDocs(embedder, fresh)
+	}
 	index := NewSearchIndex(docs, m.tokenizer.Name())
-	st := m.state
+
+	pages, sections := countPagesSections(docs)
+	st := prev
 	st.Built = time.Now().Format(time.RFC3339)
-	st.Pages = 0
-	st.Sections = 0
+	st.Pages = pages
+	st.Sections = sections
 	st.Commit = GitCurrentHead(repoRoot)
 	st.Types = registry.PerTypeHashes
 	st.SchemaHash = registry.GlobalHash
-	if m.embedClient != nil {
-		st.EmbeddingModel = m.embedClient.Model()
-	}
+	st = applyEmbedState(st, embedder, dims)
+
+	m.mu.Lock()
 	if err := m.persist(index, st); err != nil {
+		m.mu.Unlock()
 		return err
 	}
 	m.index = index
 	m.state = st
+	m.mu.Unlock()
 	m.generation.Add(1)
 	return nil
 }
@@ -805,7 +838,7 @@ func (m *IndexManager) Staleness(repoRoot, embedModel string) StalenessKind {
 		return StalenessCommitChanged
 	}
 	// schema differs: check per-type hashes for a partial rebuild
-	if mapEqual(st.Types, diskPerType) && !schemaChanged {
+	if maps.Equal(st.Types, diskPerType) && !schemaChanged {
 		return StalenessFullRebuildNeeded
 	}
 	var changed []string
@@ -827,18 +860,6 @@ func (m *IndexManager) Staleness(repoRoot, embedModel string) StalenessKind {
 	m.changedTypes = changed
 	m.mu.Unlock()
 	return StalenessTypesChanged
-}
-
-func mapEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
 }
 
 // ChangedTypes returns the type names detected by the last Staleness call.

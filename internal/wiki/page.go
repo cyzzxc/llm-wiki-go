@@ -39,17 +39,20 @@ type WritePageResult struct {
 }
 
 // WritePage writes content to the path resolved from slug, creating
-// parent directories. Does not validate or commit.
+// parent directories. Does not validate or commit. The slug is validated
+// first — an invalid slug is an error, never a filesystem write.
 func WritePage(slugStr, content, wikiRoot string) (WritePageResult, error) {
-	if slug, err := NewSlug(slugStr); err == nil {
-		if path, err := slug.Resolve(wikiRoot); err == nil {
-			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-				return WritePageResult{}, err
-			}
-			return WritePageResult{BytesWritten: len(content), Path: path}, nil
-		}
+	slug, err := NewSlug(slugStr)
+	if err != nil {
+		return WritePageResult{}, err
 	}
-	path := filepath.Join(wikiRoot, slugStr+".md")
+	if path, err := slug.Resolve(wikiRoot); err == nil {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return WritePageResult{}, err
+		}
+		return WritePageResult{BytesWritten: len(content), Path: path}, nil
+	}
+	path := filepath.Join(wikiRoot, slug.String()+".md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return WritePageResult{}, err
 	}
@@ -59,8 +62,9 @@ func WritePage(slugStr, content, wikiRoot string) (WritePageResult, error) {
 	return WritePageResult{BytesWritten: len(content), Path: path}, nil
 }
 
-// ListAssets lists co-located assets of a bundle page as wiki:// URIs.
-func ListAssets(slug Slug, wikiRoot string) ([]string, error) {
+// ListAssets lists co-located assets of a bundle page as wiki:// URIs
+// (wiki://<wiki>/<slug>/<filename>).
+func ListAssets(slug Slug, wikiRoot, wikiName string) ([]string, error) {
 	bundleDir := filepath.Join(wikiRoot, slug.String())
 	if !dirExists(bundleDir) || !fileExists(filepath.Join(bundleDir, "index.md")) {
 		return nil, nil
@@ -73,7 +77,7 @@ func ListAssets(slug Slug, wikiRoot string) ([]string, error) {
 	for _, e := range entries {
 		name := e.Name()
 		if name != "index.md" && e.Type().IsRegular() {
-			assets = append(assets, fmt.Sprintf("wiki://%s/%s", slug, name))
+			assets = append(assets, fmt.Sprintf("wiki://%s/%s/%s", wikiName, slug, name))
 		}
 	}
 	sort.Strings(assets)
@@ -182,20 +186,6 @@ func PromoteToBundle(slug Slug, wikiRoot string) error {
 		return err
 	}
 	return os.Rename(flat, dest)
-}
-
-// DeletePage removes a page (flat or bundle). Returns false when the page
-// was not found.
-func DeletePage(slugStr, wikiRoot string) (bool, error) {
-	flat := filepath.Join(wikiRoot, slugStr+".md")
-	if fileExists(flat) {
-		return true, os.Remove(flat)
-	}
-	bundle := filepath.Join(wikiRoot, slugStr)
-	if fileExists(filepath.Join(bundle, "index.md")) {
-		return true, os.RemoveAll(bundle)
-	}
-	return false, nil
 }
 
 // StripFrontmatter removes the frontmatter block from raw content;

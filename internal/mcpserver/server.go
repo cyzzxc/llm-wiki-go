@@ -1,5 +1,5 @@
 // Package mcpserver exposes the wiki engine over the Model Context
-// Protocol: 23 wiki_* tools, wiki:// resources, stdio and Streamable HTTP
+// Protocol: 24 wiki_* tools, wiki:// resources, stdio and Streamable HTTP
 // transports.
 package mcpserver
 
@@ -7,10 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -850,8 +848,6 @@ func (s *Server) readResource(uri string) (string, error) {
 	return result.Content, nil
 }
 
-func strPtr(s string) *string { return &s }
-
 // ── Transports ───────────────────────────────────────────────────────────────
 
 // ServeStdio runs the MCP server over stdin/stdout until ctx is done.
@@ -906,9 +902,10 @@ func (s *Server) ServeHTTP(ctx context.Context, port int, allowedHosts []string,
 func hostAllowlist(next http.Handler, allowed map[string]bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(allowed) > 0 {
+			// net.SplitHostPort handles IPv6 brackets: "[::1]:8080" -> "::1"
 			host := r.Host
-			if i := strings.LastIndexByte(host, ':'); i >= 0 {
-				host = host[:i]
+			if h, _, err := net.SplitHostPort(r.Host); err == nil {
+				host = h
 			}
 			if !allowed[host] {
 				http.Error(w, "host not allowed", http.StatusForbidden)
@@ -918,9 +915,3 @@ func hostAllowlist(next http.Handler, allowed map[string]bool) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-var (
-	_ = os.DirFS
-	_ = filepath.Join
-	_ = sort.Strings
-)

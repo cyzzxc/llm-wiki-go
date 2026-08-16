@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"llm-wiki-go/internal/wiki"
@@ -461,7 +464,12 @@ func (c *cli) cmdIndex(args []string) int {
 		}
 		if flagBool(flags, "dry-run") {
 			count := 0
-			filepathWalkMd(space.WikiRoot, func() { count++ })
+			filepath.WalkDir(space.WikiRoot, func(path string, d fs.DirEntry, err error) error {
+				if err == nil && !d.IsDir() && strings.HasSuffix(path, ".md") {
+					count++
+				}
+				return nil
+			})
 			fmt.Printf("Would index %d pages from %s\n", count, space.WikiRoot)
 			return 0
 		}
@@ -581,20 +589,12 @@ func formatCounts(m map[string]int) string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sortStrings(keys)
+	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		parts = append(parts, fmt.Sprintf("%s(%d)", k, m[k]))
 	}
 	return strings.Join(parts, " ")
-}
-
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
 }
 
 func (c *cli) cmdLint(args []string) int {

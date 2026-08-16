@@ -90,7 +90,7 @@ Go 版增量功能（Rust 原版无）。`[embedding]` 配置并 `index rebuild`
 
 - 嵌入文本：`title + "\n" + summary + "\n" + body`，按 `max_text_chars`（rune）截断——确定性，重建可复现。
 - 向量在索引时**批量**生成（`batch_size` 条/请求），单位化后随 index.gob 持久化（4096 维 float32 ≈ 16KB/页）。
-- 三种模式都套用 status/confidence 乘子；semantic 的摘要取 summary（无则正文头部），无词可高亮。
+- 三种模式都套用 status/confidence 乘子；摘要统一走关键词路径：命中查询词则高亮窗口，无词面命中则取正文开头（semantic 查询无词面重叠时即后者）。
 - **同模型硬约束**：`state.toml` 记录 `embedding_model`；配置换模型 → 索引判定 stale → 全量重建（向量空间不可混用）。
 - 未配置嵌入而请求 semantic/hybrid → 错误 `semantic search not configured — set [embedding] in config and rebuild the index`。
 - 成本参考（AxonHub / qwen3-embedding-8b）：~1.4s/条，批量摊薄；2 页库重建 2.2s；semantic/hybrid 查询每次 1 次网关往返。

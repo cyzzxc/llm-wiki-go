@@ -40,8 +40,9 @@ type IngestReport struct {
 }
 
 // Ingest validates (and optionally commits) files under a wiki path.
-func Ingest(path string, opts IngestOptions, wikiRoot string, registry *TypeRegistry, validation ValidationConfig) (*IngestReport, error) {
-	repoRoot := filepath.Dir(wikiRoot)
+// repoRoot is the git repository root (parent of the wiki content dir —
+// which is NOT necessarily wikiRoot's parent when wiki_root is nested).
+func Ingest(path string, opts IngestOptions, wikiRoot, repoRoot string, registry *TypeRegistry, validation ValidationConfig) (*IngestReport, error) {
 	report := &IngestReport{Warnings: []string{}, Redacted: []RedactionReport{}}
 
 	full := path

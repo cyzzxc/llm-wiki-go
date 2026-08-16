@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
-
-	"llm-wiki-go/internal/assets"
 )
 
 // ── Config ops ───────────────────────────────────────────────────────────────
@@ -57,7 +56,8 @@ func OpsConfigSet(engine *WikiEngine, wikiFlag, key, value string, globalWrite b
 	return fmt.Sprintf("Set %s = %s (wiki: %s)", key, value, name), nil
 }
 
-// OpsConfigListGlobal renders the raw global config TOML.
+// OpsConfigListGlobal renders the global config TOML with any
+// api_key value masked.
 func OpsConfigListGlobal(engine *WikiEngine) (string, error) {
 	raw, err := os.ReadFile(engine.State.ConfigPath)
 	if err != nil {
@@ -66,7 +66,14 @@ func OpsConfigListGlobal(engine *WikiEngine) (string, error) {
 		}
 		return "", err
 	}
-	return string(raw), nil
+	return maskAPIKeyLines(string(raw)), nil
+}
+
+// Go regexp has no backreferences; match either quoted or bare values.
+var apiKeyLineRe = regexp.MustCompile(`(?m)^(\s*api_key\s*=\s*)(['"][^'\n]*['"]|[^\s#][^\n]*)`)
+
+func maskAPIKeyLines(tomlText string) string {
+	return apiKeyLineRe.ReplaceAllString(tomlText, "$1\"***\"")
 }
 
 // ── Index ops ────────────────────────────────────────────────────────────────
@@ -81,7 +88,7 @@ func OpsIndexRebuild(engine *WikiEngine, wikiName string) (*IndexReport, error) 
 	if err != nil {
 		return nil, err
 	}
-	space.GraphCache.Rebuild(space.IndexManager.Generation(), func() (*WikiGraph, error) {
+	space.GraphCache.GetFresh(space.IndexManager.LastCommit(), func() (*WikiGraph, error) {
 		ix := space.IndexManager.Searcher()
 		if ix == nil {
 			return NewWikiGraph(), nil
@@ -166,16 +173,7 @@ func OpsSchemaAdd(engine *WikiEngine, wikiName, typeName, schemaPath string) (st
 		return "", fmt.Errorf("invalid JSON in %s: %v", schemaPath, err)
 	}
 	wt, _ := doc["x-wiki-types"].(map[string]any)
-	if _, ok := wt[typeName]; !ok {
-		return "", fmt.Errorf("schema does not declare type %q in x-wiki-types", typeName)
-	}
-	// compile check
-	if _, _, err := BuildSpace(space.RepoRoot); err != nil {
-		// pre-existing state is fine; only new-file errors matter here
-		if strings.Contains(err.Error(), filepath.Base(schemaPath)) {
-			return "", err
-		}
-	}
+	_, declared := wt[typeName]
 
 	dest := filepath.Join(space.RepoRoot, "schemas", filepath.Base(schemaPath))
 	if err := os.WriteFile(dest, raw, 0o644); err != nil {
@@ -187,17 +185,15 @@ func OpsSchemaAdd(engine *WikiEngine, wikiName, typeName, schemaPath string) (st
 	if err != nil {
 		return "", err
 	}
-	needToml := true
-	for name, te := range wikiCfg.Types {
-		_ = name
-		if te.Schema == filepath.Join("schemas", filepath.Base(schemaPath)) {
-			needToml = false
-			break
-		}
-	}
-	if wt[typeName] != nil {
-		if _, declared := wt[typeName]; declared {
-			needToml = false
+	// Rust semantics: only schemas that do NOT declare the type via
+	// x-wiki-types need an explicit [types.<name>] registration.
+	needToml := !declared
+	if declared {
+		for _, te := range wikiCfg.Types {
+			if te.Schema == filepath.Join("schemas", filepath.Base(schemaPath)) {
+				needToml = false
+				break
+			}
 		}
 	}
 	if needToml {
@@ -394,5 +390,3 @@ func LogsClear(engine *WikiEngine) (int, error) {
 	}
 	return n, nil
 }
-
-var _ = assets.Schema // keep assets import for schema ops helpers

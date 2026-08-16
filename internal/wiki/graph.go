@@ -885,11 +885,14 @@ func WrapGraphMD(rendered, format string, filter GraphFilter) string {
 
 // ── Graph cache with snapshot warm-start ─────────────────────────────────────
 
-// GraphCache caches the full graph keyed by index generation, optionally
+// GraphCache caches the full graph keyed by the index's last indexed
+// commit (state.toml) — stable across process restarts and invalidated by
+// every index update. Generation() must NOT be used: it resets to 0 on
+// every process start, which would serve stale snapshots. Optionally
 // snapshot-backed (gob, gzip for compressed format names).
 type GraphCache struct {
 	mu           sync.Mutex
-	generation   uint64
+	key          string
 	graph        *WikiGraph
 	snapshotDir  string
 	keep         int
@@ -902,63 +905,77 @@ func NewGraphCache(snapshotDir string, keep int, compressed bool) *GraphCache {
 	return &GraphCache{snapshotDir: snapshotDir, keep: keep, compress: compressed}
 }
 
-// GetFresh returns the cached graph for gen, rebuilding via build on miss.
-func (c *GraphCache) GetFresh(gen uint64, build func() (*WikiGraph, error)) (*WikiGraph, error) {
+// Invalidate drops the cached graph (next GetFresh rebuilds).
+func (c *GraphCache) Invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.graph != nil && c.generation == gen {
+	c.graph = nil
+	c.key = ""
+}
+
+// GetFresh returns the cached graph for key, rebuilding via build on miss.
+func (c *GraphCache) GetFresh(key string, build func() (*WikiGraph, error)) (*WikiGraph, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.graph != nil && c.key == key {
 		return c.graph, nil
 	}
 	g, err := build()
 	if err != nil {
 		return nil, err
 	}
-	c.graph, c.generation = g, gen
+	c.graph, c.key = g, key
 	if c.snapshotDir != "" {
 		c.writeSnapshot(g)
 	}
 	return g, nil
 }
 
-// Rebuild forces a fresh build, invalidating the cache.
-func (c *GraphCache) Rebuild(gen uint64, build func() (*WikiGraph, error)) (*WikiGraph, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	g, err := build()
-	if err != nil {
-		return nil, err
-	}
-	c.graph, c.generation = g, gen
-	if c.snapshotDir != "" {
-		c.writeSnapshot(g)
-	}
-	return g, nil
-}
-
-// WarmStart loads the newest snapshot into the cache without a build; the
-// generation still forces a rebuild check on the next GetFresh.
-func (c *GraphCache) WarmStart() {
+// WarmStart loads the newest snapshot into the cache and returns its
+// recorded key (the commit it was built at; "" when no snapshot loads).
+// The caller serves it only when the key matches the current index state
+// — GetFresh revalidates against the key it is given.
+func (c *GraphCache) WarmStart() string {
 	if c.snapshotDir == "" {
-		return
+		return ""
 	}
 	entries, err := os.ReadDir(c.snapshotDir)
 	if err != nil {
-		return
+		return ""
 	}
-	var names []string
+	type snapMeta struct{ name, key string }
+	var snaps []snapMeta
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "wiki-graph-") && strings.HasSuffix(e.Name(), ".gob") {
-			names = append(names, e.Name())
+		n := e.Name()
+		if !strings.HasPrefix(n, "wiki-graph-") || !strings.HasSuffix(n, ".gob") {
+			continue
+		}
+		// name: wiki-graph-<UnixNano>-<commit>.gob
+		rest := strings.TrimSuffix(strings.TrimPrefix(n, "wiki-graph-"), ".gob")
+		if idx := strings.IndexByte(rest, '-'); idx >= 0 {
+			snaps = append(snaps, snapMeta{n, rest[idx+1:]})
 		}
 	}
-	if len(names) == 0 {
-		return
+	if len(snaps) == 0 {
+		return ""
 	}
-	sort.Strings(names) // UnixNano names sort chronologically
-	newest := names[len(names)-1]
-	f, err := os.Open(filepath.Join(c.snapshotDir, newest))
+	sort.Slice(snaps, func(i, j int) bool { // newest first
+		return snaps[i].name > snaps[j].name
+	})
+	for _, snap := range snaps {
+		key := c.loadSnapshot(snap.name, snap.key)
+		if key != "" {
+			return key
+		}
+	}
+	return ""
+}
+
+// loadSnapshot decodes one snapshot; returns its key on success.
+func (c *GraphCache) loadSnapshot(name, key string) string {
+	f, err := os.Open(filepath.Join(c.snapshotDir, name))
 	if err != nil {
-		return
+		return ""
 	}
 	defer f.Close()
 	var g WikiGraph
@@ -966,13 +983,13 @@ func (c *GraphCache) WarmStart() {
 	if c.compress {
 		gz, err := gzip.NewReader(f)
 		if err != nil {
-			return
+			return ""
 		}
 		defer gz.Close()
 		r = gz
 	}
 	if err := gob.NewDecoder(r).Decode(&g); err != nil {
-		return
+		return ""
 	}
 	g.adjOut = map[int][]int{}
 	g.adjIn = map[int][]int{}
@@ -981,14 +998,16 @@ func (c *GraphCache) WarmStart() {
 		g.adjIn[e.To] = append(g.adjIn[e.To], i)
 	}
 	c.graph = &g
-	c.lastSnapshot = newest
+	c.key = key
+	c.lastSnapshot = name
+	return key
 }
 
 func (c *GraphCache) writeSnapshot(g *WikiGraph) {
 	if err := os.MkdirAll(c.snapshotDir, 0o755); err != nil {
 		return
 	}
-	path := filepath.Join(c.snapshotDir, fmt.Sprintf("wiki-graph-%d.gob", time.Now().UnixNano()))
+	path := filepath.Join(c.snapshotDir, fmt.Sprintf("wiki-graph-%d-%s.gob", time.Now().UnixNano(), c.key))
 	f, err := os.Create(path)
 	if err != nil {
 		return

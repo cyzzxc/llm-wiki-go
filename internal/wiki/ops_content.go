@@ -35,7 +35,7 @@ func ContentRead(engine *WikiEngine, uri, wikiFlag string, noFrontmatter, listAs
 		return nil, err
 	}
 	if listAssets {
-		assets, err := ListAssets(slug, space.WikiRoot)
+		assets, err := ListAssets(slug, space.WikiRoot, space.Name)
 		if err != nil {
 			return nil, err
 		}

@@ -39,7 +39,7 @@ Commands:
   content write <uri> [--file <PATH>]   (content from file or stdin)
   content new <uri> [--section] [--bundle] [--name] [--type] [--dry-run]
   content commit [slugs…] [--all] [-m <msg>]
-  search <query> [--type] [--no-excerpt] [--top-k] [--include-sections] [--cross-wiki] [--format]
+  search <query> [--type] [--no-excerpt] [--top-k] [--include-sections] [--cross-wiki] [--semantic|--hybrid] [--format]
   list [--type] [--status] [--page] [--page-size] [--format]
   ingest <path> [--dry-run] [--redact] [--format]
   graph [--format] [--root] [--depth] [--type] [--relation] [--output] [--cross-wiki]
@@ -189,8 +189,20 @@ func (c *cli) dispatch(ctx context.Context, args []string) int {
 	}
 }
 
+// boolFlags never consume the following token — `search --semantic 注意力`
+// must treat the query as positional, not as the flag's value.
+var boolFlags = map[string]bool{
+	"semantic": true, "hybrid": true, "no-excerpt": true, "all": true,
+	"redact": true, "force": true, "cross-wiki": true, "no-frontmatter": true,
+	"list-assets": true, "section": true, "bundle": true, "dry-run": true,
+	"delete": true, "delete-pages": true, "template": true, "global": true,
+	"no-follow": true, "include-sections": true, "set-default": true,
+	"watch": true, "acp": true,
+}
+
 // parseFlags splits argv into (positional, flags). "--flag value" and
-// "--flag=value" both work; bare flags are "true".
+// "--flag=value" both work; bare flags are "true"; known boolean flags
+// never swallow the next token.
 func parseFlags(argv []string) ([]string, map[string]string) {
 	var pos []string
 	flags := map[string]string{}
@@ -204,11 +216,11 @@ func parseFlags(argv []string) ([]string, map[string]string) {
 			flags[name[:eq]] = name[eq+1:]
 			continue
 		}
-		if i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+		if boolFlags[name] || (i+1 >= len(argv)) || strings.HasPrefix(argv[i+1], "-") {
+			flags[name] = "true"
+		} else {
 			flags[name] = argv[i+1]
 			i++
-		} else {
-			flags[name] = "true"
 		}
 	}
 	return pos, flags

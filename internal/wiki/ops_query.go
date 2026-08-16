@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	embedpkg "llm-wiki-go/internal/embed"
 )
 
 // SearchParams parameterize the search ops entry point. Mode selects
@@ -32,6 +30,7 @@ func OpsSearch(engine *WikiEngine, wikiName string, p SearchParams) (*SearchResu
 		mode = ModeKeyword
 	}
 	var queryEmb []float32
+	hybridWeight := 0.5
 	if mode != ModeKeyword {
 		if space.Embed == nil {
 			return nil, fmt.Errorf("semantic search not configured — set [embedding] in config and rebuild the index")
@@ -43,6 +42,7 @@ func OpsSearch(engine *WikiEngine, wikiName string, p SearchParams) (*SearchResu
 		if len(vecs) > 0 {
 			queryEmb = vecs[0]
 		}
+		hybridWeight = space.Embed.Config().HybridWeight
 	}
 	opts := SearchOptions{
 		NoExcerpt:       p.NoExcerpt,
@@ -53,7 +53,7 @@ func OpsSearch(engine *WikiEngine, wikiName string, p SearchParams) (*SearchResu
 		SearchConfig:    space.Resolved.Search,
 		Mode:            mode,
 		QueryEmbedding:  queryEmb,
-		HybridWeight:    embedWeightFrom(space),
+		HybridWeight:    hybridWeight,
 	}
 	ix := space.IndexManager.Searcher()
 	if ix == nil {
@@ -310,15 +310,6 @@ func suggestField(registry *TypeRegistry, sourceType, candidateType string) stri
 		}
 	}
 	return "[[wikilink]]"
-}
-
-// embedWeightFrom returns the hybrid blend weight (default 0.5) from
-// the engine-global embedding config.
-func embedWeightFrom(space *SpaceContext) float64 {
-	if space.Embed != nil {
-		return space.Embed.Config().HybridWeight
-	}
-	return embedpkg.Defaults().HybridWeight
 }
 
 func orDefault(v, def int) int {

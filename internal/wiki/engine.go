@@ -25,7 +25,7 @@ type SpaceContext struct {
 	Resolved   ResolvedConfig
 
 	communityMu       sync.Mutex
-	communityGen      uint64
+	communityGen      string
 	communityStats    *CommunityStats
 	communityMap      map[string]int
 	communityLocalCnt int
@@ -258,7 +258,9 @@ func MountSpace(entry WikiEntry, stateDir string, config *GlobalConfig) (*SpaceC
 		format := resolved.Graph.SnapshotFormat
 		compressed := format == "bincode+lz4" || format == "bincode+zstd" || format == "gob+gzip"
 		graphCache = NewGraphCache(filepath.Join(stateDir, "snapshots", entry.Name), max(resolved.Graph.SnapshotKeep, 1), compressed)
-		graphCache.WarmStart()
+		if key := graphCache.WarmStart(); key != "" && key != GitCurrentHead(repoRoot) {
+			graphCache.Invalidate() // snapshot from another commit — rebuild on demand
+		}
 	} else {
 		graphCache = NewGraphCache("", 0, false)
 	}
@@ -297,7 +299,7 @@ func (s *SpaceContext) GetOrBuildGraph(filter GraphFilter) (*WikiGraph, error) {
 	if !filter.IsDefault() {
 		return build()
 	}
-	return s.GraphCache.GetFresh(s.IndexManager.Generation(), func() (*WikiGraph, error) {
+	return s.GraphCache.GetFresh(s.IndexManager.LastCommit(), func() (*WikiGraph, error) {
 		ix := s.IndexManager.Searcher()
 		if ix == nil {
 			return NewWikiGraph(), nil
@@ -310,7 +312,7 @@ func (s *SpaceContext) GetOrBuildGraph(filter GraphFilter) (*WikiGraph, error) {
 func (s *SpaceContext) CommunityData(minNodes int) (*CommunityStats, map[string]int) {
 	s.communityMu.Lock()
 	defer s.communityMu.Unlock()
-	gen := s.IndexManager.Generation()
+	gen := s.IndexManager.LastCommit()
 	if s.communityMap == nil || s.communityGen != gen {
 		g, err := s.GraphCache.GetFresh(gen, func() (*WikiGraph, error) {
 			ix := s.IndexManager.Searcher()
@@ -339,11 +341,4 @@ func (s *SpaceContext) CommunityData(minNodes int) (*CommunityStats, map[string]
 		return nil, nil
 	}
 	return s.communityStats, s.communityMap
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

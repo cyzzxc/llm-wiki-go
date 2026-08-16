@@ -130,9 +130,8 @@ func (w *Watcher) loop(fw *fsnotify.Watcher) {
 			if !ok {
 				return
 			}
-			if ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
-				continue
-			}
+			// Remove/Rename matter too: a deletion must reach the index.
+			// spaceFor maps by directory, which still exists for removes.
 			wikiName := spaceFor(ev.Name)
 			if wikiName == "" {
 				continue

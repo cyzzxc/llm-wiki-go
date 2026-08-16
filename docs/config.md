@@ -94,7 +94,7 @@ debounce_ms = 500
 [embedding]                   # 语义搜索（Go 版增量；global-only，默认关）
 enabled = false               # 关闭 = 引擎完全离线，纯 BM25
 base_url = ""                 # OpenAI 兼容网关，如 http://192.168.6.2:48080/v1
-api_key = ""                  # 或环境变量 LLM_WIKI_EMBEDDING_API_KEY（优先）
+api_key = ""                  # 或环境变量 LLM_WIKI_EMBEDDING_API_KEY（优先）；config get/list 输出打码
 model = "qwen3-embedding-8b"  # ★ 索引与查询必须同模型；换模型自动触发全量重建
 batch_size = 16               # 每次 /embeddings 请求的文本数（批量摊薄 ~1.4s/条延迟）
 max_text_chars = 4000         # 每页嵌入文本截断（title+summary+body，rune 计）

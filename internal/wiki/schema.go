@@ -211,7 +211,8 @@ func BuildSpace(repoRoot string) (*TypeRegistry, *IndexSchema, error) {
 			}
 			if !seenField[name] {
 				seenField[name] = true
-				indexSchema.Fields[name] = classifyField(prop, hasKey(sf.edges, name))
+				_, isEdge := sf.edges[name]
+				indexSchema.Fields[name] = classifyField(prop, isEdge)
 			}
 		}
 		for alias, canonical := range sf.aliases {
@@ -483,11 +484,6 @@ func hasEnumOrConst(prop map[string]any) bool {
 	return ok
 }
 
-func hasKey[K comparable, V any](m map[K]V, k K) bool {
-	_, ok := m[k]
-	return ok
-}
-
 func aliasFor(aliases map[string]string, canonical string) (string, bool) {
 	for a, c := range aliases {
 		if c == canonical {
@@ -511,13 +507,16 @@ func edgesSorted(m map[string]EdgeDecl) []EdgeDecl {
 }
 
 func containsPath(files []*schemaFile, path string) bool {
-	abs1, err1 := filepath.Abs(path)
+	abs1, err := filepath.Abs(path)
+	if err != nil {
+		abs1 = filepath.Clean(path)
+	}
 	for _, f := range files {
-		abs2, err2 := filepath.Abs(f.path)
-		if err1 == nil && err2 == nil && abs1 == abs2 {
-			return true
+		abs2, err := filepath.Abs(f.path)
+		if err != nil {
+			abs2 = filepath.Clean(f.path)
 		}
-		if f.path == path {
+		if abs1 == abs2 {
 			return true
 		}
 	}

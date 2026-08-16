@@ -41,7 +41,8 @@ func GitCommit(repoRoot, message string) (string, error) {
 		}
 		return "", err
 	}
-	return firstLine(out), nil
+	// commit prints "[branch abbrev-hash] msg" — return the full hash
+	return GitCurrentHead(repoRoot), nil
 }
 
 // GitCommitPaths stages specific paths and commits; "" when nothing changed.
@@ -67,7 +68,7 @@ func GitCommitPaths(repoRoot string, paths []string, message string) (string, er
 		}
 		return "", err
 	}
-	return firstLine(out), nil
+	return GitCurrentHead(repoRoot), nil
 }
 
 // GitCurrentHead returns the HEAD commit hash, or "" with no commits.
@@ -110,11 +111,17 @@ func GitChangedWikiFiles(repoRoot, wikiRoot string) ([]ChangedFile, error) {
 
 // GitChangedSinceCommit detects changed .md files between a past commit and HEAD.
 func GitChangedSinceCommit(repoRoot, wikiRoot, fromCommit string) ([]ChangedFile, error) {
-	out, err := gitOut(repoRoot, "diff", "--name-status", fromCommit, "HEAD", "--", relUnder(repoRoot, wikiRoot))
+	out, err := gitOut(repoRoot, "-c", "core.quotePath=false", "diff", "--name-status", fromCommit, "HEAD", "--", relUnder(repoRoot, wikiRoot))
 	if err != nil {
 		return nil, err
 	}
 	prefix := relUnder(repoRoot, wikiRoot)
+	appendMd := func(rawPath string, status DeltaKind, changes *[]ChangedFile) {
+		path := filepath.ToSlash(rawPath)
+		if strings.HasPrefix(path, prefix) && strings.HasSuffix(path, ".md") {
+			*changes = append(*changes, ChangedFile{Path: path, Status: status})
+		}
+	}
 	var changes []ChangedFile
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
@@ -125,14 +132,12 @@ func GitChangedSinceCommit(repoRoot, wikiRoot, fromCommit string) ([]ChangedFile
 			continue
 		}
 		status := normalizeStatus(fields[0])
-		path := fields[1]
-		// renames list "new\told"; track the new path
-		if len(fields) == 3 {
-			path = fields[1]
+		if len(fields) == 3 { // "R100\told\tnew" — old dies, new appears
+			appendMd(fields[1], DeltaDeleted, &changes)
+			appendMd(fields[2], status, &changes)
+			continue
 		}
-		if strings.HasPrefix(filepath.ToSlash(path), prefix) && strings.HasSuffix(path, ".md") {
-			changes = append(changes, ChangedFile{Path: filepath.ToSlash(path), Status: status})
-		}
+		appendMd(fields[1], status, &changes)
 	}
 	return changes, nil
 }
@@ -164,9 +169,14 @@ func parsePorcelain(out, prefix string) []ChangedFile {
 		}
 		status := normalizeStatus(strings.TrimSpace(line[:2]))
 		path := filepath.ToSlash(strings.TrimSpace(line[3:]))
-		// rename format: "R  new -> old"
+		// rename format: "R  old -> new" — record the new path and the
+		// old path as deleted
 		if idx := strings.Index(path, " -> "); idx >= 0 {
+			old := path[:idx]
 			path = path[idx+4:]
+			if strings.HasPrefix(old, prefix) && strings.HasSuffix(old, ".md") {
+				changes = append(changes, ChangedFile{Path: old, Status: DeltaDeleted})
+			}
 		}
 		if strings.HasPrefix(path, prefix) && strings.HasSuffix(path, ".md") {
 			changes = append(changes, ChangedFile{Path: path, Status: status})

@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -177,26 +175,11 @@ func (c *cli) cmdWatch(ctx context.Context, args []string) int {
 		case <-ctx.Done():
 			return 0
 		case ev := <-w.Events:
-			for _, p := range ev.Paths {
-				if report, _, err := wiki.OpsIngest(engine, ev.Wiki, p, false, false); err != nil {
-					logger.Warn("auto-ingest failed", "wiki", ev.Wiki, "path", p, "error", err)
-				} else {
-					fmt.Printf("ingested %s: %d pages, %d warnings\n", p, report.PagesValidated, len(report.Warnings))
-				}
+			if report, _, err := wiki.OpsIngest(engine, ev.Wiki, ".", false, false); err != nil {
+				logger.Warn("auto-ingest failed", "wiki", ev.Wiki, "paths", strings.Join(ev.Paths, ","), "error", err)
+			} else {
+				fmt.Printf("ingested %s: %d pages, %d warnings\n", strings.Join(ev.Paths, ", "), report.PagesValidated, len(report.Warnings))
 			}
 		}
 	}
-}
-
-// filepathWalkMd counts .md files under root (for index rebuild --dry-run).
-func filepathWalkMd(root string, fn func()) {
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, ".md") {
-			fn()
-		}
-		return nil
-	})
 }

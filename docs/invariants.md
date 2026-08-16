@@ -42,7 +42,7 @@
 
 ## 图
 
-18. 缓存键：进程内用 `Generation()`；**跨进程对齐物用 `LastCommit()`**（generation 重启归零）。
+18. 图/社区缓存键一律 `LastCommit()`（state.toml 的 git HEAD）：跨进程稳定、每次索引更新即失效。**禁用 `Generation()`**（进程重启归零，曾导致跨进程吃过期快照）。快照文件名内嵌构建 commit，`WarmStart` 载入后与当前 HEAD 不符即作废。
 19. 非默认 filter（root/types/relation）绕过图缓存直接构建；缓存只存全图。
 20. 社区发现节点按 slug 排序（确定性）；pass 上限防振荡。
 
@@ -57,9 +57,12 @@
 24. **同模型硬约束**：`state.toml` 的 `embedding_model` 与当前配置不符 → 索引 stale、全量重建；查询与索引必须同网关同模型。
 25. 嵌入文本构造确定性（title+summary+body 截断）；向量单位化存储，余弦=点积。
 26. 嵌入失败不阻塞索引：降级为无向量（警告），keyword 模式不受影响。
+27. 索引写入路径（Rebuild/Update/RebuildTypes）由 `writeMu` 串行、`mu` 只在快照/安装时短持——**嵌入（网络）与 git IO 不得在 `mu` 内执行**，检索永不被写路径堵塞。
 
 ## 校验
 
-27. `default` 类型必须 require title+type（兜底不变量，违反即挂载失败）。
-28. 标题缺失是硬错误；未知类型/ schema 违规按 strictness 降级。
-29. dry-run 零写入（含 redact）；redact 只动 body 不动 frontmatter，行号 1-based。
+28. `default` 类型必须 require title+type（兜底不变量，违反即挂载失败）。
+29. 标题缺失是硬错误；未知类型/ schema 违规按 strictness 降级。
+30. dry-run 零写入（含 redact）；redact 只动 body 不动 frontmatter，行号 1-based。
+31. git porcelain/diff 一律 `-c core.quotePath=false`；重命名解析必须同时记录新路径与旧路径删除。
+32. `embedding.api_key` 在 config get/list 输出中一律打码。
